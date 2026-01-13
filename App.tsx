@@ -36,6 +36,7 @@ const App: React.FC = () => {
   });
 
   const navigate = useCallback((view: AppView) => {
+    console.log(`Navigating to: ${view}`);
     setCurrentView(view);
     window.scrollTo(0, 0);
   }, []);
@@ -47,10 +48,8 @@ const App: React.FC = () => {
       const { data: profileData, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).single();
       
       if (profileError || !profileData) {
-        // If we're authenticated but have no profile, we must setup
-        if (currentView !== AppView.PROFILE_SETUP) {
-           navigate(AppView.PROFILE_SETUP);
-        }
+        // Logged in but no profile record - needs setup
+        navigate(AppView.PROFILE_SETUP);
         return;
       }
 
@@ -76,29 +75,32 @@ const App: React.FC = () => {
     }
   };
 
+  // Centralized "Start" action
+  const handleStartAction = useCallback(() => {
+    if (!session && !isDemoMode) {
+      navigate(AppView.AUTH);
+    } else if (userProfile.teaching.length === 0 || userProfile.learning.length === 0) {
+      navigate(AppView.PROFILE_SETUP);
+    } else {
+      navigate(AppView.MATCHING);
+    }
+  }, [session, isDemoMode, userProfile, navigate]);
+
   const handleDemoMode = useCallback(() => {
     setIsDemoMode(true);
     setIsInitialLoading(false);
     
-    const saved = localStorage.getItem(DEMO_STORAGE_KEY);
-    let mockUser: UserProfile;
-    
-    if (saved) {
-      mockUser = JSON.parse(saved);
-    } else {
-      mockUser = {
-        name: 'Demo Expert',
-        fullName: 'Demo Account',
-        email: 'guest@skillswap.io',
-        teaching: ['React', 'TypeScript'],
-        learning: ['Python'],
-        bio: 'Guest expert testing the system.',
-        tokens: 10,
-        portfolio: [],
-        level: 1, xp: 120, streak: 3
-      };
-      localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(mockUser));
-    }
+    const mockUser = {
+      name: 'Guest Expert',
+      fullName: 'Demo Account',
+      email: 'guest@skillswap.io',
+      teaching: ['React', 'TypeScript'],
+      learning: ['Python'],
+      bio: 'Guest expert testing the system.',
+      tokens: 10,
+      portfolio: [],
+      level: 1, xp: 120, streak: 3
+    };
     setUserProfile(mockUser);
     setSession({ user: { id: 'demo-id' } });
     navigate(AppView.LANDING);
@@ -107,19 +109,17 @@ const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
 
-    // Fast-track initialization: Only check session, don't wait for profile.
     const initApp = async () => {
       try {
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (mounted) {
           setSession(existingSession);
-          setIsInitialLoading(false); // UI can render now
+          setIsInitialLoading(false);
           if (existingSession) {
-            fetchProfile(existingSession.user.id);
+            await fetchProfile(existingSession.user.id);
           }
         }
       } catch (err) {
-        console.error("Critical: Auth check failed", err);
         if (mounted) setIsInitialLoading(false);
       }
     };
@@ -129,13 +129,17 @@ const App: React.FC = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
       
+      console.log(`Auth event: ${event}`);
       setSession(newSession);
+      
       if (newSession) {
         fetchProfile(newSession.user.id);
-        // Automatically move away from AUTH view on success
-        if (currentView === AppView.AUTH) navigate(AppView.LANDING);
-      } else {
-        // Handle logout
+        // Reactive navigation away from Auth view
+        if (currentView === AppView.AUTH) {
+          navigate(AppView.LANDING);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setIsDemoMode(false);
         setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0 });
         navigate(AppView.LANDING);
       }
@@ -160,7 +164,8 @@ const App: React.FC = () => {
       return true;
     }
     try {
-      await supabase.from('profiles').update({ tokens: newTokens }).eq('id', session?.user?.id);
+      const { error } = await supabase.from('profiles').update({ tokens: newTokens }).eq('id', session?.user?.id);
+      if (error) throw error;
       setUserProfile(prev => ({ ...prev, tokens: newTokens }));
       return true;
     } catch (e) { return false; }
@@ -178,7 +183,7 @@ const App: React.FC = () => {
   const renderCurrentView = () => {
     switch (currentView) {
       case AppView.LANDING:
-        return <LandingPage onNavigate={navigate} userProfile={session ? userProfile : undefined} onStart={() => navigate(session ? AppView.MATCHING : AppView.AUTH)} onPurchase={handlePurchaseTokens} />;
+        return <LandingPage onNavigate={navigate} userProfile={session ? userProfile : undefined} onStart={handleStartAction} onPurchase={handlePurchaseTokens} />;
       case AppView.AUTH:
         return <AuthPage onBack={() => navigate(AppView.LANDING)} onDemoMode={handleDemoMode} />; 
       case AppView.PROFILE_SETUP:
@@ -192,7 +197,7 @@ const App: React.FC = () => {
       case AppView.FEEDBACK:
         return <FeedbackPage userProfile={userProfile} setUserProfile={setUserProfile} onFinish={() => navigate(AppView.LANDING)} />;
       case AppView.MARKETPLACE:
-        return <MarketplacePage onNavigate={navigate} onStartMatch={() => navigate(session ? AppView.MATCHING : AppView.AUTH)} />;
+        return <MarketplacePage onNavigate={navigate} onStartMatch={handleStartAction} />;
       case AppView.COMMUNITY:
         return <CommunityPage onNavigate={navigate} />;
       case AppView.LEADERBOARD:
@@ -200,7 +205,7 @@ const App: React.FC = () => {
       case AppView.INQUIRY:
         return <InquiryPage onBack={() => navigate(AppView.LANDING)} />;
       default:
-        return <LandingPage onNavigate={navigate} onStart={() => navigate(AppView.MATCHING)} userProfile={session ? userProfile : undefined} onPurchase={handlePurchaseTokens} />;
+        return <LandingPage onNavigate={navigate} userProfile={session ? userProfile : undefined} onStart={handleStartAction} onPurchase={handlePurchaseTokens} />;
     }
   };
 

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { supabase } from '../services/supabaseClient';
 
@@ -43,6 +42,7 @@ const AuthPage: React.FC<Props> = ({ onBack, onDemoMode, isSupabaseDown }) => {
           }
           throw error;
         }
+        // Success is handled by onAuthStateChange in App.tsx
       } else {
         const { error } = await supabase.auth.signUp({
           email,
@@ -200,7 +200,7 @@ const AuthPage: React.FC<Props> = ({ onBack, onDemoMode, isSupabaseDown }) => {
             </button>
 
             <p className="text-[9px] text-slate-600 uppercase font-black tracking-widest leading-relaxed max-w-[300px]">
-              If you see a "Failed to Fetch" error, please use Demo Mode. Secure identity is provided via local state when server is offline.
+              Secure identity is provided via local state when server is offline.
             </p>
           </div>
         </div>
