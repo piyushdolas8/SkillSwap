@@ -19,9 +19,9 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.LANDING);
   const [session, setSession] = useState<any>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
-  const [isSupabaseDown, setIsSupabaseDown] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [dbNeedsSetup, setDbNeedsSetup] = useState(false);
+  const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
+  const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
   
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     try {
@@ -39,9 +39,42 @@ const App: React.FC = () => {
     window.scrollTo(0, 0);
   }, []);
 
+  const fetchProfile = async (userId: string) => {
+    try {
+      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      if (!profileData) {
+        navigate(AppView.PROFILE_SETUP);
+        return;
+      }
+
+      const { data: skillsData } = await supabase.from('skills').select('skill_name, type').eq('user_id', userId);
+
+      setUserProfile({
+        name: profileData.name || '',
+        fullName: profileData.full_name || '',
+        email: profileData.email || '',
+        bio: profileData.bio || '',
+        tokens: profileData.tokens || 0,
+        level: profileData.level || 1,
+        xp: profileData.xp || 0,
+        streak: profileData.streak || 0,
+        teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
+        learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
+        portfolio: []
+      });
+
+      // If we are currently on the AUTH view, move to LANDING
+      setCurrentView(prev => prev === AppView.AUTH ? AppView.LANDING : prev);
+
+    } catch (e) { 
+      console.warn("Profile fetch deferred or failed"); 
+      // If profile doesn't exist, they might need setup
+      navigate(AppView.PROFILE_SETUP);
+    }
+  };
+
   const handleDemoMode = useCallback(() => {
     setIsDemoMode(true);
-    setIsSupabaseDown(false);
     setIsInitialLoading(false);
     
     const saved = localStorage.getItem(DEMO_STORAGE_KEY);
@@ -71,80 +104,49 @@ const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
 
-    // Aggressive failsafe to ensure the app doesn't hang
-    const failsafe = setTimeout(() => {
-      if (mounted && isInitialLoading) {
-        setIsInitialLoading(false);
-        // We don't mark as down yet, just stop the spinner to show Landing
-      }
-    }, 2000);
-
     const initApp = async () => {
       try {
-        const { data: { session: existingSession }, error } = await supabase.auth.getSession();
-        if (error) throw error;
-
-        if (mounted && existingSession) {
-          setSession(existingSession);
-          // Async profile fetch to avoid blocking render
-          fetchProfile(existingSession.user.id);
+        const { data: { session: existingSession } } = await supabase.auth.getSession();
+        if (mounted) {
+          if (existingSession) {
+            setSession(existingSession);
+            await fetchProfile(existingSession.user.id);
+          }
+          setIsInitialLoading(false);
         }
       } catch (err) {
-        console.warn("Auth initialization failed - Backend may be cold-starting");
-      } finally {
-        if (mounted) {
-          setIsInitialLoading(false);
-          clearTimeout(failsafe);
-        }
+        console.warn("Auth initialization failed");
+        if (mounted) setIsInitialLoading(false);
       }
     };
 
     initApp();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      if (mounted && newSession) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      if (mounted) {
         setSession(newSession);
-        fetchProfile(newSession.user.id);
+        if (newSession) {
+          await fetchProfile(newSession.user.id);
+        } else {
+          // User logged out
+          setCurrentView(AppView.LANDING);
+          setUserProfile({
+            name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0
+          });
+        }
       }
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
-      clearTimeout(failsafe);
     };
   }, []);
 
-  const fetchProfile = async (userId: string) => {
-    try {
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles').select('*').eq('id', userId).single();
-
-      if (profileError) {
-        if (profileError.code === '42P01') setDbNeedsSetup(true);
-        else if (profileError.code === 'PGRST116') navigate(AppView.PROFILE_SETUP);
-        return;
-      }
-
-      const { data: skillsData } = await supabase
-        .from('skills').select('skill_name, type').eq('user_id', userId);
-
-      setUserProfile({
-        name: profileData.name || '',
-        fullName: profileData.full_name || '',
-        email: profileData.email || '',
-        bio: profileData.bio || '',
-        tokens: profileData.tokens || 0,
-        level: profileData.level || 1,
-        xp: profileData.xp || 0,
-        streak: profileData.streak || 0,
-        teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
-        learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
-        portfolio: []
-      });
-    } catch (e) {
-      console.warn("Profile fetch deferred");
-    }
+  const handleMatchFound = (partner: UserProfile, matchId: string) => {
+    setPartnerProfile(partner);
+    setCurrentMatchId(matchId);
+    navigate(AppView.MATCH_FOUND);
   };
 
   const handlePurchaseTokens = async (amount: number) => {
@@ -174,15 +176,15 @@ const App: React.FC = () => {
       case AppView.LANDING:
         return <LandingPage onNavigate={navigate} userProfile={session ? userProfile : undefined} onStart={() => navigate(session ? AppView.MATCHING : AppView.AUTH)} onPurchase={handlePurchaseTokens} />;
       case AppView.AUTH:
-        return <AuthPage onBack={() => navigate(AppView.LANDING)} onDemoMode={handleDemoMode} isSupabaseDown={isSupabaseDown} />; 
+        return <AuthPage onBack={() => navigate(AppView.LANDING)} onDemoMode={handleDemoMode} />; 
       case AppView.PROFILE_SETUP:
         return <ProfileSetup userProfile={userProfile} setUserProfile={setUserProfile} onComplete={() => navigate(AppView.LANDING)} />;
       case AppView.MATCHING:
-        return <MatchingPage onMatchFound={() => navigate(AppView.MATCH_FOUND)} />;
+        return <MatchingPage onMatchFound={handleMatchFound} />;
       case AppView.MATCH_FOUND:
-        return <MatchFoundPage onJoin={() => navigate(AppView.LIVE_SESSION)} />;
+        return <MatchFoundPage partner={partnerProfile} onJoin={() => navigate(AppView.LIVE_SESSION)} />;
       case AppView.LIVE_SESSION:
-        return <LiveSession skill={userProfile.learning[0] || 'Python'} onEnd={() => navigate(AppView.FEEDBACK)} />;
+        return <LiveSession matchId={currentMatchId} partner={partnerProfile} skill={userProfile.learning[0] || 'Python'} onEnd={() => navigate(AppView.FEEDBACK)} />;
       case AppView.FEEDBACK:
         return <FeedbackPage userProfile={userProfile} setUserProfile={setUserProfile} onFinish={() => navigate(AppView.LANDING)} />;
       case AppView.MARKETPLACE:
