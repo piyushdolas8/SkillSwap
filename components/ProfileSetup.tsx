@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { UserProfile } from '../types';
 import { supabase } from '../services/supabaseClient';
 
@@ -29,8 +29,10 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
   const [isUploading, setIsUploading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  // Local draft state to prevent "vanishing" UI during async jumps
+  const [avatarDraftUrl, setAvatarDraftUrl] = useState<string>(userProfile.avatarUrl || '');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const suggestionContainerRef = useRef<HTMLDivElement>(null);
 
   const filterSkills = (input: string, currentList: string[]) => {
     if (!input) return [];
@@ -48,7 +50,11 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Immediate preview for better UX
+    const localPreview = URL.createObjectURL(file);
+    setAvatarDraftUrl(localPreview);
     setIsUploading(true);
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("No session found");
@@ -56,12 +62,15 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
       const userId = session.user.id;
       const fileExt = file.name.split('.').pop();
       const fileName = `avatar-${Date.now()}.${fileExt}`;
-      const filePath = `${userId}/${fileName}`;
+      const filePath = `public/${userId}/${fileName}`;
 
       // 1. Upload to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { 
+          upsert: true,
+          contentType: file.type 
+        });
 
       if (uploadError) throw uploadError;
 
@@ -70,11 +79,17 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         .from('avatars')
         .getPublicUrl(filePath);
 
-      // 3. Update local state
+      // 3. Persist immediately to database so re-fetches don't wipe it
+      await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', userId);
+
+      // 4. Sync states
+      setAvatarDraftUrl(publicUrl);
       setUserProfile(prev => ({ ...prev, avatarUrl: publicUrl }));
+      
     } catch (err: any) {
       console.error("Upload failed:", err);
       alert("Error uploading image: " + err.message);
+      setAvatarDraftUrl(userProfile.avatarUrl || ''); // Revert on error
     } finally {
       setIsUploading(false);
     }
@@ -121,6 +136,8 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
       if (!session) throw new Error("No active session");
 
       const userId = session.user.id;
+      
+      // Update the main profile record
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert({
@@ -129,16 +146,13 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           full_name: userProfile.fullName,
           email: session.user.email,
           tokens: userProfile.tokens || 5,
-          github_url: userProfile.githubUrl,
-          linkedin_url: userProfile.linkedinUrl,
-          avatar_url: userProfile.avatarUrl,
-          birthday: userProfile.birthday || null,
+          avatar_url: avatarDraftUrl, // Use the most recent URL (draft or public)
           bio: userProfile.bio
         });
 
       if (profileError) throw profileError;
 
-      // Update skills
+      // Update skills in separate table
       await supabase.from('skills').delete().eq('user_id', userId);
       const skillsToInsert = [
         ...userProfile.teaching.map(s => ({ user_id: userId, skill_name: s, type: 'teaching' })),
@@ -148,6 +162,8 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         await supabase.from('skills').insert(skillsToInsert);
       }
 
+      // Important: Sync the final state back to App.tsx before completing
+      setUserProfile(prev => ({ ...prev, avatarUrl: avatarDraftUrl }));
       onComplete();
     } catch (err: any) {
       console.error("Save error:", err);
@@ -184,10 +200,10 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 {isUploading ? (
                   <div className="flex flex-col items-center">
                     <div className="size-8 border-2 border-primary border-t-transparent animate-spin rounded-full mb-2"></div>
-                    <p className="text-[10px] font-black text-primary uppercase">Uploading</p>
+                    <p className="text-[10px] font-black text-primary uppercase">Syncing...</p>
                   </div>
-                ) : userProfile.avatarUrl ? (
-                  <img src={userProfile.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : avatarDraftUrl ? (
+                  <img src={avatarDraftUrl} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
                   <div className="text-center">
                     <span className="material-symbols-outlined text-slate-500 !text-4xl mb-2">add_a_photo</span>
@@ -195,7 +211,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                   </div>
                 )}
                 <div className="absolute inset-0 bg-primary/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                   <span className="material-symbols-outlined text-white">edit</span>
+                   <span className="material-symbols-outlined text-white">edit_square</span>
                 </div>
               </div>
               <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleAvatarChange} />
@@ -209,7 +225,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                   value={userProfile.name}
                   onChange={(e) => setUserProfile(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="Username"
-                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none"
+                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none focus:border-primary transition-colors"
                 />
               </div>
               <div className="space-y-2">
@@ -219,7 +235,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                   value={userProfile.fullName}
                   onChange={(e) => setUserProfile(prev => ({ ...prev, fullName: e.target.value }))}
                   placeholder="Your Name"
-                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none"
+                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none focus:border-primary transition-colors"
                 />
               </div>
               <div className="space-1 md:col-span-2">
@@ -227,8 +243,8 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 <textarea 
                   value={userProfile.bio}
                   onChange={(e) => setUserProfile(prev => ({ ...prev, bio: e.target.value }))}
-                  placeholder="A short bio about yourself..."
-                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none h-20 resize-none"
+                  placeholder="Tell us what you're passionate about..."
+                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none h-20 resize-none focus:border-primary transition-colors"
                 />
               </div>
             </div>
@@ -236,8 +252,11 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="bg-card-dark border border-border-dark rounded-2xl p-8">
-            <h2 className="text-white text-xl font-bold mb-6">Skills I can teach</h2>
+          <div className="bg-card-dark border border-border-dark rounded-2xl p-8 shadow-xl">
+            <h2 className="text-white text-xl font-bold mb-6 flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary">school</span>
+              Skills I can teach
+            </h2>
             <div className="relative mb-6">
               <input 
                 type="text" 
@@ -246,11 +265,11 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 onBlur={() => setTimeout(() => setShowTeachingSuggestions(false), 200)}
                 onChange={(e) => setSkillInput(e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, 'teaching')}
-                placeholder="Search..."
-                className="w-full bg-background-dark border border-border-dark rounded-xl text-white px-5 py-3 outline-none"
+                placeholder="Search techniques..."
+                className="w-full bg-background-dark border border-border-dark rounded-xl text-white px-5 py-3 outline-none focus:border-primary"
               />
               {showTeachingSuggestions && teachingSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 w-full mt-2 bg-[#1b1d27] border border-border-dark rounded-xl z-20 max-h-60 overflow-y-auto">
+                <div className="absolute top-full left-0 w-full mt-2 bg-[#1b1d27] border border-border-dark rounded-xl z-20 max-h-60 overflow-y-auto shadow-2xl">
                   {teachingSuggestions.map((s, idx) => (
                     <button key={s.name} onClick={() => addSkill(s.name, 'teaching')} className={`w-full text-left px-5 py-3 text-sm border-b border-white/5 ${selectedIndex === idx ? 'bg-primary text-white' : 'text-slate-300'}`}>
                       {s.name}
@@ -259,9 +278,9 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 min-h-[40px]">
               {userProfile.teaching.map(skill => (
-                <div key={skill} className="flex items-center gap-2 bg-primary text-white px-3 py-1.5 rounded-lg">
+                <div key={skill} className="flex items-center gap-2 bg-primary text-white px-3 py-1.5 rounded-lg animate-in fade-in zoom-in-95">
                   <span className="text-sm font-bold">{skill}</span>
                   <button onClick={() => removeSkill(skill, 'teaching')} className="material-symbols-outlined text-sm">close</button>
                 </div>
@@ -269,8 +288,11 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
             </div>
           </div>
 
-          <div className="bg-card-dark border border-border-dark rounded-2xl p-8">
-            <h2 className="text-white text-xl font-bold mb-6">Skills I want to learn</h2>
+          <div className="bg-card-dark border border-border-dark rounded-2xl p-8 shadow-xl">
+            <h2 className="text-white text-xl font-bold mb-6 flex items-center gap-2">
+              <span className="material-symbols-outlined text-emerald-500">auto_stories</span>
+              Skills I want to learn
+            </h2>
             <div className="relative mb-6">
               <input 
                 type="text" 
@@ -279,11 +301,11 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 onBlur={() => setTimeout(() => setShowLearningSuggestions(false), 200)}
                 onChange={(e) => setLearningInput(e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, 'learning')}
-                placeholder="Search..."
-                className="w-full bg-background-dark border border-border-dark rounded-xl text-white px-5 py-3 outline-none"
+                placeholder="Search goals..."
+                className="w-full bg-background-dark border border-border-dark rounded-xl text-white px-5 py-3 outline-none focus:border-primary"
               />
               {showLearningSuggestions && learningSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 w-full mt-2 bg-[#1b1d27] border border-border-dark rounded-xl z-20 max-h-60 overflow-y-auto">
+                <div className="absolute top-full left-0 w-full mt-2 bg-[#1b1d27] border border-border-dark rounded-xl z-20 max-h-60 overflow-y-auto shadow-2xl">
                   {learningSuggestions.map((s, idx) => (
                     <button key={s.name} onClick={() => addSkill(s.name, 'learning')} className={`w-full text-left px-5 py-3 text-sm border-b border-white/5 ${selectedIndex === idx ? 'bg-emerald-600 text-white' : 'text-slate-300'}`}>
                       {s.name}
@@ -292,9 +314,9 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 min-h-[40px]">
               {userProfile.learning.map(skill => (
-                <div key={skill} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-1.5 rounded-lg">
+                <div key={skill} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-1.5 rounded-lg animate-in fade-in zoom-in-95">
                   <span className="text-sm font-bold">{skill}</span>
                   <button onClick={() => removeSkill(skill, 'learning')} className="material-symbols-outlined text-sm">close</button>
                 </div>
@@ -307,9 +329,9 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           <button 
             onClick={handleSaveAndComplete}
             disabled={userProfile.teaching.length === 0 || userProfile.learning.length === 0 || !userProfile.name || isSaving || isUploading}
-            className="bg-primary text-white font-black px-12 py-4 rounded-2xl shadow-glow uppercase tracking-widest disabled:opacity-30"
+            className="bg-primary text-white font-black px-12 py-4 rounded-2xl shadow-glow-primary uppercase tracking-widest disabled:opacity-30 transition-all hover:scale-105 active:scale-95"
           >
-            {isSaving ? 'Saving...' : 'Confirm Profile'}
+            {isSaving ? 'Finalizing Profile...' : 'Confirm My Identity'}
           </button>
         </div>
       </main>

@@ -31,7 +31,7 @@ const App: React.FC = () => {
     } catch (e) {}
     
     return {
-      name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0
+      name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: ''
     };
   });
 
@@ -41,21 +41,22 @@ const App: React.FC = () => {
     window.scrollTo(0, 0);
   }, []);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string, forceNavigate = false) => {
     if (isProfileFetching) return;
     setIsProfileFetching(true);
     try {
       const { data: profileData, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).single();
       
       if (profileError || !profileData) {
-        // Logged in but no profile record - needs setup
-        navigate(AppView.PROFILE_SETUP);
+        if (forceNavigate || currentView === AppView.LANDING) {
+          navigate(AppView.PROFILE_SETUP);
+        }
         return;
       }
 
       const { data: skillsData } = await supabase.from('skills').select('skill_name, type').eq('user_id', userId);
 
-      setUserProfile({
+      const fetchedProfile: UserProfile = {
         name: profileData.name || '',
         fullName: profileData.full_name || '',
         email: profileData.email || '',
@@ -64,10 +65,18 @@ const App: React.FC = () => {
         level: profileData.level || 1,
         xp: profileData.xp || 0,
         streak: profileData.streak || 0,
+        avatarUrl: profileData.avatar_url || '',
         teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
         learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
         portfolio: []
+      };
+
+      // Only update if we aren't currently in the setup view to avoid wiping user edits
+      setUserProfile(prev => {
+        if (currentView === AppView.PROFILE_SETUP) return prev;
+        return fetchedProfile;
       });
+
     } catch (e) { 
       console.warn("Profile fetch error:", e);
     } finally {
@@ -75,7 +84,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Centralized "Start" action
   const handleStartAction = useCallback(() => {
     if (!session && !isDemoMode) {
       navigate(AppView.AUTH);
@@ -90,7 +98,7 @@ const App: React.FC = () => {
     setIsDemoMode(true);
     setIsInitialLoading(false);
     
-    const mockUser = {
+    const mockUser: UserProfile = {
       name: 'Guest Expert',
       fullName: 'Demo Account',
       email: 'guest@skillswap.io',
@@ -99,7 +107,8 @@ const App: React.FC = () => {
       bio: 'Guest expert testing the system.',
       tokens: 10,
       portfolio: [],
-      level: 1, xp: 120, streak: 3
+      level: 1, xp: 120, streak: 3,
+      avatarUrl: ''
     };
     setUserProfile(mockUser);
     setSession({ user: { id: 'demo-id' } });
@@ -128,19 +137,16 @@ const App: React.FC = () => {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
-      
-      console.log(`Auth event: ${event}`);
       setSession(newSession);
       
       if (newSession) {
-        fetchProfile(newSession.user.id);
-        // Reactive navigation away from Auth view
-        if (currentView === AppView.AUTH) {
-          navigate(AppView.LANDING);
+        // Only fetch and navigate if we aren't already logged in
+        if (event === 'SIGNED_IN') {
+           fetchProfile(newSession.user.id, true);
         }
       } else if (event === 'SIGNED_OUT') {
         setIsDemoMode(false);
-        setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0 });
+        setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: '' });
         navigate(AppView.LANDING);
       }
     });
@@ -149,7 +155,7 @@ const App: React.FC = () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [currentView, navigate]);
+  }, [navigate]);
 
   const handleMatchFound = (partner: UserProfile, matchId: string) => {
     setPartnerProfile(partner);
