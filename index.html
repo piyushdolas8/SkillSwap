@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SkillSwap | Trade Skills. Level Up. Instantly.</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#0d33f2",
+                        "background-light": "#f5f6f8",
+                        "background-dark": "#080910",
+                        "card-dark": "#161a2d",
+                        "border-dark": "#282b39"
+                    },
+                    fontFamily: {
+                        "display": ["Space Grotesk", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    boxShadow: {
+                        'glow': '0 0 15px -3px rgba(13, 51, 242, 0.6), 0 0 6px -2px rgba(13, 51, 242, 0.4)',
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background-color: #080910;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        .bg-mesh {
+            background-image: radial-gradient(at 0% 0%, rgba(13, 51, 242, 0.15) 0px, transparent 50%),
+                              radial-gradient(at 100% 100%, rgba(13, 51, 242, 0.1) 0px, transparent 50%);
+        }
+        .loader-ring {
+            border: 3px solid rgba(13, 51, 242, 0.1);
+            border-top: 3px solid #0d33f2;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #080910; }
+        ::-webkit-scrollbar-thumb { background: #282b39; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #0d33f2; }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "@google/genai": "https://esm.sh/@google/genai@1.35.0",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
+</head>
+<body class="text-slate-900 dark:text-white antialiased bg-background-dark">
+    <div id="root">
+        <div style="height: 100vh; display: flex; align-items: center; justify-content: center; background: #080910;">
+            <div class="loader-ring"></div>
+        </div>
+    </div>
+    <script type="module" src="./index.tsx"></script>
+</body>
+</html>

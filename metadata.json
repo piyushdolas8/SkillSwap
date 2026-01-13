@@ -1,0 +1,9 @@
+{
+  "name": " SkillSwap 2.0",
+  "description": "A real-time peer-to-peer skill exchange platform allowing users to learn new skills by teaching what they know through live interactive sessions.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
