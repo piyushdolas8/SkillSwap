@@ -22,6 +22,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
   const [messageInput, setMessageInput] = useState('');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isRealtimeReady, setIsRealtimeReady] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   
@@ -41,6 +42,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
   useEffect(() => {
     if (!matchId || !currentUserId) return;
 
+    // Fetch historical messages
     const fetchMessages = async () => {
       const { data } = await supabase
         .from('messages')
@@ -60,6 +62,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     };
     fetchMessages();
 
+    // Subscribe to changes
     const channel = supabase
       .channel(`match:${matchId}`)
       .on('postgres_changes', { 
@@ -70,7 +73,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       }, (payload) => {
         const newMessage = payload.new;
         setChatMessages(prev => {
-          // Prevent duplicates from own inserts
           if (prev.some(m => m.id === newMessage.id)) return prev;
           return [...prev, {
             id: newMessage.id,
@@ -81,7 +83,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
           }];
         });
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') setIsRealtimeReady(true);
+        if (status === 'CHANNEL_ERROR') console.warn("Realtime channel failed to connect");
+      });
 
     return () => { supabase.removeChannel(channel); };
   }, [matchId, partner, currentUserId]);
@@ -100,8 +105,17 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     }).select().single();
 
     if (!error && data) {
-      // Optimistic update handled by Subscription
       setMessageInput('');
+      // If realtime isn't ready, we might want to manually update for a better UX
+      if (!isRealtimeReady) {
+        setChatMessages(prev => [...prev, {
+          id: data.id,
+          sender: 'user',
+          name: 'Me',
+          text: data.content,
+          timestamp: new Date(data.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }]);
+      }
     }
   };
 
@@ -130,7 +144,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
           <div>
             <h2 className="text-white text-md font-bold leading-tight uppercase tracking-tight">SkillSwap Live</h2>
             <div className="flex items-center gap-2">
-              <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+              <span className={`flex h-2 w-2 rounded-full ${isRealtimeReady ? 'bg-green-500 animate-pulse' : 'bg-orange-500'}`}></span>
               <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em]">Session with {partner?.name || 'Alex Rivera'}</p>
             </div>
           </div>
@@ -164,6 +178,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
              <h3 className="text-white font-black text-xs uppercase tracking-widest">Real-time Peer Chat</h3>
           </div>
           <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+            {chatMessages.length === 0 && (
+              <div className="h-full flex flex-col items-center justify-center text-center opacity-30">
+                <span className="material-symbols-outlined !text-4xl mb-2">chat_bubble</span>
+                <p className="text-[10px] font-bold uppercase">No messages yet</p>
+              </div>
+            )}
             {chatMessages.map((msg, i) => (
               <div key={msg.id || i} className={`flex flex-col gap-1 ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
                 <span className="text-[9px] font-black text-slate-500 uppercase">{msg.name} • {msg.timestamp}</span>

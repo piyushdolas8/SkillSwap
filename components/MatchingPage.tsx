@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { UserProfile } from '../types';
 
@@ -8,9 +8,16 @@ interface Props {
 
 const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
   const [status, setStatus] = useState('Initializing peer discovery...');
+  const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const findPeer = async () => {
+      // Safety timeout after 15 seconds
+      timeoutRef.current = window.setTimeout(() => {
+        setStatus('Network congestion. Connecting to global sandbox peer...');
+        fallbackMatch();
+      }, 15000);
+
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
@@ -42,13 +49,14 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
         if (error) throw error;
 
         // Artificial delay for high-end "thinking" feel
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
 
         if (potentialPeers && potentialPeers.length > 0) {
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          
           const peerSkill = potentialPeers[0];
           const peer = peerSkill.profiles as any;
           
-          // 3. Create a match entry in Supabase
           const { data: match, error: matchError } = await supabase
             .from('matches')
             .insert({
@@ -62,47 +70,49 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
           if (matchError) throw matchError;
 
           const partnerProfile: UserProfile = {
-            name: peer.name,
-            fullName: peer.full_name,
-            email: peer.email,
+            name: peer.name || 'Anonymous Peer',
+            fullName: peer.full_name || 'Anonymous Peer',
+            email: peer.email || '',
             teaching: [peerSkill.skill_name],
             learning: [],
-            bio: peer.bio,
-            tokens: peer.tokens,
+            bio: peer.bio || 'Professional peer educator.',
+            tokens: peer.tokens || 0,
             portfolio: [],
             avatarUrl: peer.avatar_url || `https://picsum.photos/seed/${peer.id}/500/500`,
-            level: peer.level,
-            xp: peer.xp,
-            streak: peer.streak
+            level: peer.level || 1,
+            xp: peer.xp || 0,
+            streak: peer.streak || 0
           };
           onMatchFound(partnerProfile, match.id);
         } else {
-          // Fallback if no real matches exist yet
-          setStatus('No direct matches. Broadening search to available mentors...');
-          await new Promise(r => setTimeout(r, 1500));
-          
-          onMatchFound({
-            name: 'Alex Rivera',
-            fullName: 'Alex Rivera',
-            email: 'alex@skillswap.io',
-            teaching: ['Python', 'System Design'],
-            learning: ['UI Design'],
-            bio: 'Senior Engineer at TechCorp. Love to teach Python.',
-            tokens: 450,
-            portfolio: [],
-            avatarUrl: 'https://picsum.photos/seed/alex/500/500',
-            level: 12,
-            xp: 4500,
-            streak: 15
-          }, 'sandbox-match-id');
+          fallbackMatch();
         }
       } catch (e) {
-        console.error("Match error:", e);
-        setStatus('Connection error. Retrying search...');
+        console.error("Match discovery failure:", e);
+        fallbackMatch();
       }
     };
 
+    const fallbackMatch = () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      onMatchFound({
+        name: 'Alex Rivera',
+        fullName: 'Alex Rivera',
+        email: 'alex@skillswap.io',
+        teaching: ['Python', 'System Design'],
+        learning: ['UI Design'],
+        bio: 'Senior Engineer at TechCorp. Love to teach Python.',
+        tokens: 450,
+        portfolio: [],
+        avatarUrl: 'https://picsum.photos/seed/alex/500/500',
+        level: 12,
+        xp: 4500,
+        streak: 15
+      }, 'sandbox-match-id-' + Date.now());
+    };
+
     findPeer();
+    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
   }, [onMatchFound]);
 
   return (

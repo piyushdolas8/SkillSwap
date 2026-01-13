@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isProfileFetching, setIsProfileFetching] = useState(false);
   const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
   const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
   
@@ -40,10 +41,16 @@ const App: React.FC = () => {
   }, []);
 
   const fetchProfile = async (userId: string) => {
+    if (isProfileFetching) return;
+    setIsProfileFetching(true);
     try {
-      const { data: profileData } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (!profileData) {
-        navigate(AppView.PROFILE_SETUP);
+      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      
+      if (profileError || !profileData) {
+        // If we're authenticated but have no profile, we must setup
+        if (currentView !== AppView.PROFILE_SETUP) {
+           navigate(AppView.PROFILE_SETUP);
+        }
         return;
       }
 
@@ -62,14 +69,10 @@ const App: React.FC = () => {
         learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
         portfolio: []
       });
-
-      // If we are currently on the AUTH view, move to LANDING
-      setCurrentView(prev => prev === AppView.AUTH ? AppView.LANDING : prev);
-
     } catch (e) { 
-      console.warn("Profile fetch deferred or failed"); 
-      // If profile doesn't exist, they might need setup
-      navigate(AppView.PROFILE_SETUP);
+      console.warn("Profile fetch error:", e);
+    } finally {
+      setIsProfileFetching(false);
     }
   };
 
@@ -104,36 +107,37 @@ const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
 
+    // Fast-track initialization: Only check session, don't wait for profile.
     const initApp = async () => {
       try {
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (mounted) {
+          setSession(existingSession);
+          setIsInitialLoading(false); // UI can render now
           if (existingSession) {
-            setSession(existingSession);
-            await fetchProfile(existingSession.user.id);
+            fetchProfile(existingSession.user.id);
           }
-          setIsInitialLoading(false);
         }
       } catch (err) {
-        console.warn("Auth initialization failed");
+        console.error("Critical: Auth check failed", err);
         if (mounted) setIsInitialLoading(false);
       }
     };
 
     initApp();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
-      if (mounted) {
-        setSession(newSession);
-        if (newSession) {
-          await fetchProfile(newSession.user.id);
-        } else {
-          // User logged out
-          setCurrentView(AppView.LANDING);
-          setUserProfile({
-            name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0
-          });
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (!mounted) return;
+      
+      setSession(newSession);
+      if (newSession) {
+        fetchProfile(newSession.user.id);
+        // Automatically move away from AUTH view on success
+        if (currentView === AppView.AUTH) navigate(AppView.LANDING);
+      } else {
+        // Handle logout
+        setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0 });
+        navigate(AppView.LANDING);
       }
     });
 
@@ -141,7 +145,7 @@ const App: React.FC = () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [currentView, navigate]);
 
   const handleMatchFound = (partner: UserProfile, matchId: string) => {
     setPartnerProfile(partner);
@@ -166,7 +170,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#080910]">
         <div className="loader-ring mb-4"></div>
-        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest animate-pulse">Establishing Peer Network...</p>
+        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest animate-pulse">Initializing SkillSwap...</p>
       </div>
     );
   }
