@@ -53,6 +53,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     getSession();
   }, []);
 
+  // Re-attach stream whenever the video element is mounted and video is ON
+  useEffect(() => {
+    if (!isVideoOff && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [isVideoOff]);
+
   // Show error for 4 seconds
   useEffect(() => {
     if (errorNotification) {
@@ -125,14 +132,20 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
   // Media Control Logic
   useEffect(() => {
     if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => track.enabled = !isMuted);
-      streamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
-      
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'media-update',
-        payload: { isMuted, isVideoOff }
+      streamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = !isMuted;
       });
+      streamRef.current.getVideoTracks().forEach(track => {
+        track.enabled = !isVideoOff;
+      });
+      
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'media-update',
+          payload: { isMuted, isVideoOff }
+        });
+      }
     }
   }, [isMuted, isVideoOff, isRealtimeReady]);
 
@@ -251,7 +264,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       }
     } catch (err: any) {
       if (err.name === 'NotAllowedError') {
-        setErrorNotification("Permission denied. Please allow screen access to share.");
+        setErrorNotification("Screen share cancelled or permission denied.");
       } else {
         setErrorNotification("Failed to start screen share. Please try again.");
       }
@@ -277,9 +290,11 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
       } catch (e: any) { 
-        setErrorNotification("Camera/Mic access denied. Some features will be limited.");
+        setErrorNotification("Camera/Mic access denied. Please check your browser permissions.");
         console.warn("Media failed", e); 
       }
     };
