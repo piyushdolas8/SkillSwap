@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AppView } from '../types';
 
@@ -39,7 +38,11 @@ const LeaderboardPage: React.FC<Props> = ({ onNavigate }) => {
       </header>
 
       <div className="max-w-[1000px] mx-auto">
-        <div className="mb-16 text-center">
+        <div className="mb-12 text-center relative">
+          <div className="inline-flex items-center gap-2 px-6 py-2 rounded-full bg-primary/10 border border-primary/20 text-primary text-[10px] font-black uppercase tracking-[0.3em] mb-6 backdrop-blur-md">
+            <span className="material-symbols-outlined text-sm">simulation</span>
+            Sample Data - Demo Network Participants
+          </div>
           <h1 className="text-white text-5xl font-black mb-4 tracking-tight uppercase">Skill Titans</h1>
           <p className="text-slate-400 text-lg font-medium">The top 1% of our decentralized learning economy.</p>
         </div>
@@ -96,6 +99,10 @@ const LeaderboardPage: React.FC<Props> = ({ onNavigate }) => {
               <div className="w-px h-10 bg-white/10" />
               <button onClick={() => onNavigate(AppView.MATCHING)} className="bg-primary text-white text-xs font-black uppercase tracking-widest px-8 py-3 rounded-xl hover:shadow-glow transition-all">Climb Higher</button>
            </div>
+        </div>
+
+        <div className="mt-12 text-center text-slate-600 text-[10px] font-bold uppercase tracking-[0.2em]">
+          All peer activity shown above is generated for simulation purposes.
         </div>
       </div>
     </div>

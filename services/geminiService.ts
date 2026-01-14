@@ -35,6 +35,22 @@ export const generateSkillMatchExplanation = async (userSkills: string[], partne
   }
 };
 
+export const getCareerAdvice = async (learning: string[], teaching: string[]) => {
+  const ai = getAI();
+  const prompt = `The user is currently learning [${learning.join(', ')}] and already knows [${teaching.join(', ')}]. 
+  Provide one punchy, visionary career advice sentence (max 25 words) that suggests how these skills combined can lead to a high-value niche. Use a mentor-like, encouraging tone.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+    return response.text || "Combining your current skills will unlock unique architectural opportunities in the next tech wave.";
+  } catch (error) {
+    return "Your unique skill mix is highly valuable in the evolving peer-to-peer economy.";
+  }
+};
+
 export const generateLearningRoadmap = async (skills: string[]) => {
   const ai = getAI();
   const prompt = `Create a 4-step learning roadmap for someone wanting to master: ${skills.join(', ')}. 
@@ -46,7 +62,7 @@ export const generateLearningRoadmap = async (skills: string[]) => {
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-        maxOutputTokens: 500, // Prevent runaway token usage/truncation
+        maxOutputTokens: 500,
         responseSchema: {
           type: Type.ARRAY,
           items: {

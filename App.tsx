@@ -27,10 +27,40 @@ const App: React.FC = () => {
   });
 
   const navigate = useCallback((view: AppView) => {
-    console.log(`[Navigation] Moving to ${view}`);
     setCurrentView(view);
     window.scrollTo(0, 0);
   }, []);
+
+  const calculateStreak = async (userId: string, currentStreak: number, lastActiveAt: string | null) => {
+    const now = new Date();
+    const lastActive = lastActiveAt ? new Date(lastActiveAt) : null;
+    
+    // If it's the first time ever
+    if (!lastActive) {
+      await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+      return 1;
+    }
+
+    const diffInMs = now.getTime() - lastActive.getTime();
+    const diffInHours = diffInMs / (1000 * 60 * 60);
+
+    let newStreak = currentStreak;
+
+    if (diffInHours >= 24 && diffInHours < 48) {
+      // It's the next day!
+      newStreak += 1;
+      await supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId);
+    } else if (diffInHours >= 48) {
+      // Broke the streak :(
+      newStreak = 1;
+      await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+    } else {
+      // Still the same day, just update timestamp
+      await supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId);
+    }
+    
+    return newStreak;
+  };
 
   const fetchProfile = async (userId: string) => {
     if (isProfileFetching) return;
@@ -43,6 +73,8 @@ const App: React.FC = () => {
         .single();
       
       if (profileError || !profileData) return;
+
+      const updatedStreak = await calculateStreak(userId, profileData.streak || 0, profileData.last_active_at);
 
       const { data: skillsData } = await supabase
         .from('skills')
@@ -72,7 +104,7 @@ const App: React.FC = () => {
         tokens: profileData.tokens || 0,
         level: profileData.level || 1,
         xp: profileData.xp || 0,
-        streak: profileData.streak || 0,
+        streak: updatedStreak,
         avatarUrl: profileData.avatar_url || '',
         teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
         learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],

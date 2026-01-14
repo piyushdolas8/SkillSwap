@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, AppView } from '../types';
 import { supabase } from '../services/supabaseClient';
+import { getCareerAdvice } from '../services/geminiService';
 
 interface Props {
   onStart: () => void;
@@ -19,10 +20,24 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
   const isDashboard = !!userProfile;
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showTokenModal, setShowTokenModal] = useState(false);
+  const [coachAdvice, setCoachAdvice] = useState<string>("Analyzing your skill potential...");
+  const [loadingAdvice, setLoadingAdvice] = useState(false);
   
   // Payment Simulation State
   const [isProcessing, setIsProcessing] = useState(false);
   const [purchaseSuccess, setPurchaseSuccess] = useState(false);
+
+  useEffect(() => {
+    const fetchAdvice = async () => {
+      if (userProfile && (userProfile.learning.length > 0 || userProfile.teaching.length > 0)) {
+        setLoadingAdvice(true);
+        const advice = await getCareerAdvice(userProfile.learning, userProfile.teaching);
+        setCoachAdvice(advice);
+        setLoadingAdvice(false);
+      }
+    };
+    fetchAdvice();
+  }, [userProfile?.learning, userProfile?.teaching]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -183,7 +198,7 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
                     <span className="bg-primary text-white text-[10px] font-black px-2 py-0.5 rounded uppercase">Level {userProfile.level || 1} Expert</span>
                     <span className="text-orange-500 text-[10px] font-black px-2 py-0.5 rounded bg-orange-500/10 border border-orange-500/20 uppercase flex items-center gap-1">
                       <span className="material-symbols-outlined !text-xs">local_fire_department</span>
-                      {userProfile.streak || 0} Day Streak
+                      {userProfile.streak || 1} Day Streak
                     </span>
                   </div>
                   <h1 className="text-white text-5xl font-black tracking-tighter uppercase">HI, {userProfile.name?.split(' ')[0]}</h1>
@@ -249,18 +264,31 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
                       </div>
                    </div>
                    
-                   <div className="bg-[#111218] border border-white/5 p-8 rounded-[2.5rem]">
+                   <div className="bg-[#111218] border border-white/5 p-8 rounded-[2.5rem] relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4 opacity-10">
+                         <span className={`material-symbols-outlined !text-4xl text-primary ${loadingAdvice ? 'animate-spin' : ''}`}>psychology</span>
+                      </div>
                       <h3 className="text-white font-bold mb-6 uppercase tracking-tighter flex items-center gap-2">
-                        <span className="material-symbols-outlined text-sm text-primary">psychology</span>
                         AI Career Coach
                       </h3>
                       <div className="space-y-4">
                         <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
-                          <p className="text-slate-400 text-xs italic leading-relaxed">
-                            "I see you're mastering {userProfile.learning[0]}. Based on market trends, learning **Solidity** or **System Design** next would increase your Expert Value by 40%."
+                          <p className={`text-slate-300 text-xs italic leading-relaxed transition-opacity duration-500 ${loadingAdvice ? 'opacity-30' : 'opacity-100'}`}>
+                            "{coachAdvice}"
                           </p>
                         </div>
-                        <button className="w-full text-primary text-[10px] font-black uppercase tracking-widest hover:underline">Ask Coach Anything</button>
+                        <button 
+                          onClick={async () => {
+                            setLoadingAdvice(true);
+                            const advice = await getCareerAdvice(userProfile.learning, userProfile.teaching);
+                            setCoachAdvice(advice);
+                            setLoadingAdvice(false);
+                          }}
+                          className="w-full text-primary text-[10px] font-black uppercase tracking-widest hover:underline disabled:opacity-50"
+                          disabled={loadingAdvice}
+                        >
+                          {loadingAdvice ? 'Synthesizing...' : 'Refresh Advice'}
+                        </button>
                       </div>
                    </div>
                 </div>
