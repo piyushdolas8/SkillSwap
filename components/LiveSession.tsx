@@ -67,7 +67,7 @@ const highlightCode = (code: string, language: string) => {
       { regex: /(#.*$)/gm, class: 'text-[#6a9955] italic' },
       { regex: /\b(def|return|if|elif|else|for|while|import|from|class|as|with|try|except|finally|pass|in|is|not|and|or|lambda|None|True|False)\b/g, class: 'text-[#569cd6]' },
       { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
-      { regex: /\b(print|len|range|enumerate|zip|dict|list|set|str|int|float|open)\b/g, class: 'text-[#4ec9b0]' },
+      { regex: /\b(print|target|range|enumerate|zip|dict|list|set|str|int|float|open)\b/g, class: 'text-[#4ec9b0]' },
     ]
   };
 
@@ -81,12 +81,14 @@ const highlightCode = (code: string, language: string) => {
 
 type SessionMode = 'code' | 'draw';
 type SidebarTab = 'chat' | 'files';
-type DrawingTool = 'pencil' | 'text' | 'rect' | 'circle' | 'eraser';
+type DrawingTool = 'select' | 'pencil' | 'text' | 'rect' | 'circle' | 'eraser';
+type TransformMode = 'move' | 'resize' | 'rotate' | null;
 
 const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEnd }) => {
   const [mode, setMode] = useState<SessionMode>('code');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chat');
-  const [drawingTool, setDrawingTool] = useState<DrawingTool>('pencil');
+  const [drawingTool, setDrawingTool] = useState<DrawingTool>('select');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedLang, setSelectedLang] = useState(skill.toLowerCase());
   const [code, setCode] = useState<string>(DEFAULT_CODE_TEMPLATES[skill.toLowerCase()] || DEFAULT_CODE_TEMPLATES['python']);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -104,12 +106,17 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   
   const [elements, setElements] = useState<CanvasElement[]>([]);
   const [drawColor, setDrawColor] = useState('#0d33f2');
+  const [drawFontSize, setDrawFontSize] = useState(24);
+  const [drawFontFamily, setDrawFontFamily] = useState(SANS_FONT);
+  
   const [activeTextInput, setActiveTextInput] = useState<{ x: number, y: number, id: string } | null>(null);
   const [currentTextValue, setCurrentTextValue] = useState('');
 
   const isInteractingRef = useRef(false);
   const currentStrokeRef = useRef<Point[]>([]);
   const startPosRef = useRef<Point>({ x: 0, y: 0 });
+  const transformModeRef = useRef<TransformMode>(null);
+  const initialTransformRef = useRef({ translateX: 0, translateY: 0, scale: 1, rotation: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const partnerVideoRef = useRef<HTMLVideoElement>(null);
@@ -177,6 +184,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         setChatMessages(prev => [...prev, payload.payload]);
       })
       .on('broadcast', { event: 'element-added' }, (payload) => setElements(prev => [...prev, payload.payload.element]))
+      .on('broadcast', { event: 'element-updated' }, (payload) => {
+        setElements(prev => prev.map(el => el.id === payload.payload.element.id ? payload.payload.element : el));
+      })
       .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
       .on('broadcast', { event: 'file-shared' }, (payload) => setSharedFiles(prev => [payload.payload.file, ...prev]))
       .on('broadcast', { event: 'media-update' }, (payload) => setPartnerMediaStatus(payload.payload));
@@ -262,11 +272,17 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
     elements.forEach(el => {
       ctx.save();
-      ctx.translate(el.translateX, el.translateY);
+      const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
+      const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
+      
+      ctx.translate(el.translateX + centerX, el.translateY + centerY);
       ctx.rotate(el.rotation);
       ctx.scale(el.scale, el.scale);
+      ctx.translate(-centerX, -centerY);
+      
       ctx.strokeStyle = el.type === 'eraser' ? '#ffffff' : el.color;
       ctx.lineWidth = el.width;
       ctx.lineCap = 'round';
@@ -289,12 +305,43 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         ctx.ellipse(cx, cy, Math.abs(rx), Math.abs(ry), 0, 0, 2 * Math.PI);
         ctx.stroke();
       } else if (el.type === 'text' && el.text) {
-        ctx.fillStyle = el.color; ctx.font = `${el.fontSize || 24}px ${el.fontFamily || SANS_FONT}`; ctx.textBaseline = 'top';
-        ctx.fillText(el.text, el.bbox.minX, el.bbox.minY);
+        ctx.fillStyle = el.color; 
+        ctx.font = `${el.fontSize || 24}px ${el.fontFamily || SANS_FONT}`; 
+        ctx.textBaseline = 'top';
+        const lines = el.text.split('\n');
+        lines.forEach((line, i) => {
+          ctx.fillText(line, el.bbox.minX, el.bbox.minY + i * (el.fontSize || 24) * 1.2);
+        });
       }
       ctx.restore();
     });
-  }, [elements]);
+
+    if (selectedId && drawingTool === 'select') {
+      const el = elements.find(e => e.id === selectedId);
+      if (el) {
+        ctx.save();
+        const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
+        const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
+        ctx.translate(el.translateX + centerX, el.translateY + centerY);
+        ctx.rotate(el.rotation);
+        ctx.scale(el.scale, el.scale);
+        ctx.translate(-centerX, -centerY);
+        
+        ctx.strokeStyle = '#0d33f2';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(el.bbox.minX - 5, el.bbox.minY - 5, (el.bbox.maxX - el.bbox.minX) + 10, (el.bbox.maxY - el.bbox.minY) + 10);
+        
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#0d33f2';
+        ctx.fillRect(el.bbox.maxX + 2, el.bbox.maxY + 2, 8, 8);
+        ctx.beginPath();
+        ctx.arc(centerX, el.bbox.minY - 20, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }, [elements, selectedId, drawingTool]);
 
   useEffect(() => { renderCanvas(); }, [renderCanvas]);
 
@@ -304,14 +351,63 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     startPosRef.current = { x, y };
+
+    if (drawingTool === 'select') {
+      if (selectedId) {
+        const el = elements.find(e => e.id === selectedId);
+        if (el) {
+          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
+          const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          if (Math.hypot(x - centerX, y - (el.bbox.minY - 20 + el.translateY)) < 20) {
+            transformModeRef.current = 'rotate';
+            initialTransformRef.current = { ...el };
+            isInteractingRef.current = true;
+            return;
+          }
+          if (Math.hypot(x - (el.bbox.maxX + el.translateX), y - (el.bbox.maxY + el.translateY)) < 20) {
+            transformModeRef.current = 'resize';
+            initialTransformRef.current = { ...el };
+            isInteractingRef.current = true;
+            return;
+          }
+        }
+      }
+
+      const hit = elements.slice().reverse().find(el => {
+        const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
+        const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
+        const translatedX = x - (el.translateX + centerX);
+        const translatedY = y - (el.translateY + centerY);
+        const cos = Math.cos(-el.rotation);
+        const sin = Math.sin(-el.rotation);
+        const rx = (translatedX * cos - translatedY * sin) / el.scale + centerX;
+        const ry = (translatedX * sin + translatedY * cos) / el.scale + centerY;
+        return rx >= el.bbox.minX && rx <= el.bbox.maxX && ry >= el.bbox.minY && ry <= el.bbox.maxY;
+      });
+
+      if (hit) {
+        setSelectedId(hit.id);
+        transformModeRef.current = 'move';
+        initialTransformRef.current = { ...hit };
+        isInteractingRef.current = true;
+      } else {
+        setSelectedId(null);
+      }
+      return;
+    }
+
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       isInteractingRef.current = true;
       currentStrokeRef.current = [{ x, y }];
     } else if (drawingTool === 'rect' || drawingTool === 'circle') {
       isInteractingRef.current = true;
     } else if (drawingTool === 'text') {
-      setActiveTextInput({ x, y, id: Math.random().toString() });
-      setCurrentTextValue('');
+      if (activeTextInput) {
+        finalizeText();
+      } else {
+        setActiveTextInput({ x, y, id: Math.random().toString() });
+        setCurrentTextValue('');
+      }
     }
   };
 
@@ -323,6 +419,32 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const y = e.clientY - rect.top;
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
+
+    if (drawingTool === 'select' && selectedId) {
+      const dx = x - startPosRef.current.x;
+      const dy = y - startPosRef.current.y;
+      setElements(prev => prev.map(el => {
+        if (el.id !== selectedId) return el;
+        if (transformModeRef.current === 'move') {
+          return { ...el, translateX: initialTransformRef.current.translateX + dx, translateY: initialTransformRef.current.translateY + dy };
+        }
+        if (transformModeRef.current === 'rotate') {
+          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
+          const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          const angle = Math.atan2(y - centerY, x - centerX) + Math.PI / 2;
+          return { ...el, rotation: angle };
+        }
+        if (transformModeRef.current === 'resize') {
+          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
+          const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          const distStart = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY);
+          const distNow = Math.hypot(x - centerX, y - centerY);
+          return { ...el, scale: initialTransformRef.current.scale * (distNow / distStart) };
+        }
+        return el;
+      }));
+      return;
+    }
 
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       currentStrokeRef.current.push({ x, y });
@@ -351,6 +473,17 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
 
   const handleMouseUp = (e: React.MouseEvent) => {
     if (!isInteractingRef.current) return;
+    
+    if (drawingTool === 'select' && selectedId) {
+      const updated = elements.find(el => el.id === selectedId);
+      if (updated) {
+        channelRef.current?.send({ type: 'broadcast', event: 'element-updated', payload: { element: updated } });
+      }
+      isInteractingRef.current = false;
+      transformModeRef.current = null;
+      return;
+    }
+
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = e.clientX - rect.left;
@@ -391,20 +524,27 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const finalizeText = () => {
     if (!activeTextInput || !currentTextValue.trim()) { setActiveTextInput(null); return; }
     const { x, y } = activeTextInput;
+    
+    // Rough estimate of text bounding box
+    const lines = currentTextValue.split('\n');
+    const height = lines.length * drawFontSize * 1.2;
+    const width = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
+
     const newEl: CanvasElement = {
       id: activeTextInput.id,
       type: 'text',
       text: currentTextValue,
       color: drawColor,
-      fontSize: 24,
-      fontFamily: SANS_FONT,
+      fontSize: drawFontSize,
+      fontFamily: drawFontFamily,
       translateX: 0, translateY: 0, rotation: 0, scale: 1,
-      bbox: { minX: x, minY: y, maxX: x + 100, maxY: y + 30 },
+      bbox: { minX: x, minY: y, maxX: x + width, maxY: y + height },
       width: 0
     };
     setElements(prev => [...prev, newEl]);
     channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
     setActiveTextInput(null);
+    setCurrentTextValue('');
   };
 
   return (
@@ -460,18 +600,44 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               </div>
             ) : (
               <div className="flex-1 relative bg-white overflow-hidden">
-                <canvas ref={canvasRef} width={2000} height={2000} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className="w-full h-full cursor-crosshair" />
+                <canvas ref={canvasRef} width={2000} height={2000} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
                 {activeTextInput && (
-                  <textarea ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} onBlur={finalizeText} className="absolute bg-transparent border border-primary outline-none p-1 text-2xl" style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: SANS_FONT, color: drawColor }} />
+                  <textarea 
+                    ref={textInputRef} 
+                    autoFocus 
+                    value={currentTextValue} 
+                    onChange={(e) => setCurrentTextValue(e.target.value)} 
+                    onBlur={finalizeText} 
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }}
+                    className="absolute bg-white/10 border border-primary outline-none p-2 rounded-lg text-2xl shadow-2xl backdrop-blur-md" 
+                    style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, color: drawColor, minWidth: '150px' }} 
+                  />
                 )}
-                <div className="absolute top-8 left-8 flex flex-col gap-3 bg-[#1a1d2d]/90 backdrop-blur-2xl p-4 rounded-2xl border border-white/10 shadow-2xl z-40">
-                   {['pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
-                     <button key={tool} onClick={() => setDrawingTool(tool as DrawingTool)} className={`size-10 flex items-center justify-center rounded-lg transition-all ${drawingTool === tool ? 'bg-primary text-white' : 'text-slate-400 hover:bg-white/5'}`}>
-                       <span className="material-symbols-outlined !text-xl">{tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span>
+                
+                <div className="absolute top-8 left-8 flex flex-col gap-3 bg-[#1a1d2d]/90 backdrop-blur-2xl p-4 rounded-3xl border border-white/10 shadow-2xl z-40 animate-in fade-in slide-in-from-left-4">
+                   {['select', 'pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
+                     <button key={tool} onClick={() => { setDrawingTool(tool as DrawingTool); if (tool !== 'select') setSelectedId(null); }} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === tool ? 'bg-primary text-white scale-110 shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}>
+                       <span className="material-symbols-outlined !text-xl">{tool === 'select' ? 'near_me' : tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span>
                      </button>
                    ))}
-                   <div className="h-px w-full bg-white/10"></div>
-                   <button onClick={() => { setElements([]); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-400 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete</span></button>
+                   <div className="h-px w-full bg-white/10 my-1"></div>
+                   
+                   {/* Tool-specific styling controls */}
+                   {drawingTool === 'text' && (
+                     <div className="flex flex-col gap-3 animate-in fade-in zoom-in-95">
+                        <div className="flex flex-col gap-1">
+                          {[16, 24, 32, 48].map(size => (
+                            <button key={size} onClick={() => setDrawFontSize(size)} className={`text-[10px] font-black w-full py-1 rounded border ${drawFontSize === size ? 'bg-primary border-primary text-white' : 'border-white/10 text-slate-500'}`}>{size}px</button>
+                          ))}
+                        </div>
+                        <button onClick={() => setDrawFontFamily(prev => prev === SANS_FONT ? MONO_FONT : SANS_FONT)} className="size-10 flex items-center justify-center rounded-xl bg-white/5 text-slate-400 hover:text-white border border-white/10">
+                           <span className="material-symbols-outlined !text-xl">{drawFontFamily === MONO_FONT ? 'terminal' : 'match_case'}</span>
+                        </button>
+                     </div>
+                   )}
+
+                   <div className="h-px w-full bg-white/10 my-1"></div>
+                   <button onClick={() => { setElements([]); setSelectedId(null); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-400 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete</span></button>
                 </div>
               </div>
             )}
