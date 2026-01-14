@@ -129,9 +129,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         setElements([]);
         setSelectedId(null);
       })
-      // Added file sharing listener for collaborative experience
       .on('broadcast', { event: 'file-shared' }, (payload) => {
-        setSharedFiles(prev => [...prev, payload.payload.file]);
+        setSharedFiles(prev => [payload.payload.file, ...prev]);
       })
       .on('broadcast', { event: 'media-update' }, (payload) => {
         setPartnerMediaStatus(payload.payload);
@@ -172,7 +171,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     };
   }, [matchId, partner, currentUserId]);
 
-  // Canvas Rendering
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -183,10 +181,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
 
     elements.forEach(el => {
       ctx.save();
-      
       const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
       const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
-      
       ctx.translate(el.translateX + centerX, el.translateY + centerY);
       ctx.rotate(el.rotation);
       ctx.scale(el.scale, el.scale);
@@ -214,21 +210,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         ctx.strokeStyle = '#0d33f2';
         ctx.lineWidth = 1;
         ctx.setLineDash([5, 5]);
-        ctx.strokeRect(
-          el.bbox.minX - 5, 
-          el.bbox.minY - 5, 
-          (el.bbox.maxX - el.bbox.minX) + 10, 
-          (el.bbox.maxY - el.bbox.minY) + 10
-        );
+        ctx.strokeRect(el.bbox.minX - 5, el.bbox.minY - 5, (el.bbox.maxX - el.bbox.minX) + 10, (el.bbox.maxY - el.bbox.minY) + 10);
         ctx.setLineDash([]);
-        
         ctx.fillStyle = '#0d33f2';
         ctx.beginPath();
         ctx.arc(centerX, el.bbox.minY - 20, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillRect(el.bbox.maxX + 2, el.bbox.maxY + 2, 8, 8);
       }
-      
       ctx.restore();
     });
 
@@ -247,9 +236,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     }
   }, [elements, selectedId, drawColor, lineWidth]);
 
-  useEffect(() => {
-    renderCanvas();
-  }, [renderCanvas]);
+  useEffect(() => { renderCanvas(); }, [renderCanvas]);
 
   const getMousePos = (e: React.MouseEvent | React.TouchEvent): Point => {
     const canvas = canvasRef.current;
@@ -257,18 +244,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     const rect = canvas.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+    return { 
+      x: (clientX - rect.left) * (canvas.width / rect.width), 
+      y: (clientY - rect.top) * (canvas.height / rect.height) 
+    };
   };
 
   const handleStartInteraction = (e: React.MouseEvent | React.TouchEvent) => {
-    // If typing, finalize text
-    if (activeTextInput) {
-      finalizeText();
-      return;
-    }
-
+    if (activeTextInput) { finalizeText(); return; }
     isInteractingRef.current = true;
     const pos = getMousePos(e);
     lastMousePosRef.current = pos;
@@ -288,18 +271,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         return localX >= s.bbox.minX - 10 && localX <= s.bbox.maxX + 10 &&
                localY >= s.bbox.minY - 10 && localY <= s.bbox.maxY + 10;
       });
-
       if (hit) {
         setSelectedId(hit.id);
         const centerX = (hit.bbox.minX + hit.bbox.maxX) / 2;
         const distToRotate = Math.hypot(pos.x - (hit.translateX + centerX), pos.y - (hit.translateY + hit.bbox.minY - 20));
-        if (distToRotate < 15) {
-          interactionModeRef.current = 'rotating';
-        } else if (pos.x > hit.translateX + hit.bbox.maxX - 10 && pos.y > hit.translateY + hit.bbox.maxY - 10) {
-          interactionModeRef.current = 'scaling';
-        } else {
-          interactionModeRef.current = 'moving';
-        }
+        if (distToRotate < 15) interactionModeRef.current = 'rotating';
+        else if (pos.x > hit.translateX + hit.bbox.maxX - 10 && pos.y > hit.translateY + hit.bbox.maxY - 10) interactionModeRef.current = 'scaling';
+        else interactionModeRef.current = 'moving';
       } else {
         setSelectedId(null);
         interactionModeRef.current = null;
@@ -320,12 +298,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       setElements(prev => prev.map(s => {
         if (s.id !== selectedId) return s;
         let newT = { ...s };
-        if (interactionModeRef.current === 'moving') {
-          newT.translateX += dx;
-          newT.translateY += dy;
-        } else if (interactionModeRef.current === 'scaling') {
-          newT.scale = Math.max(0.1, s.scale + dx / 100);
-        } else if (interactionModeRef.current === 'rotating') {
+        if (interactionModeRef.current === 'moving') { newT.translateX += dx; newT.translateY += dy; }
+        else if (interactionModeRef.current === 'scaling') { newT.scale = Math.max(0.1, s.scale + dx / 100); }
+        else if (interactionModeRef.current === 'rotating') {
           const cX = (s.bbox.minX + s.bbox.maxX) / 2 + s.translateX;
           const cY = (s.bbox.minY + s.bbox.maxY) / 2 + s.translateY;
           newT.rotation = Math.atan2(pos.y - cY, pos.x - cX) + Math.PI/2;
@@ -351,8 +326,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         id: Math.random().toString(36).substr(2, 9),
         type: 'stroke',
         points: [...currentStrokeRef.current],
-        color: drawColor,
-        width: lineWidth,
+        color: drawColor, width: lineWidth,
         translateX: 0, translateY: 0, rotation: 0, scale: 1,
         bbox: { minX, minY, maxX, maxY }
       };
@@ -367,32 +341,18 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
 
   const finalizeText = () => {
     if (activeTextInput && currentTextValue.trim()) {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.font = `${selectedFontSize}px ${selectedFontFamily}`;
-          const metrics = ctx.measureText(currentTextValue);
-          const height = selectedFontSize;
-          const newEl: CanvasElement = {
-            id: activeTextInput.id,
-            type: 'text',
-            text: currentTextValue,
-            color: drawColor,
-            fontFamily: selectedFontFamily,
-            fontSize: selectedFontSize,
-            width: 1,
-            translateX: 0, translateY: 0, rotation: 0, scale: 1,
-            bbox: { 
-              minX: activeTextInput.x, 
-              minY: activeTextInput.y, 
-              maxX: activeTextInput.x + metrics.width, 
-              maxY: activeTextInput.y + height 
-            }
-          };
-          setElements(prev => [...prev, newEl]);
-          channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
-        }
+      const ctx = canvasRef.current?.getContext('2d');
+      if (ctx) {
+        ctx.font = `${selectedFontSize}px ${selectedFontFamily}`;
+        const metrics = ctx.measureText(currentTextValue);
+        const newEl: CanvasElement = {
+          id: activeTextInput.id, type: 'text', text: currentTextValue, color: drawColor,
+          fontFamily: selectedFontFamily, fontSize: selectedFontSize, width: 1,
+          translateX: 0, translateY: 0, rotation: 0, scale: 1,
+          bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + metrics.width, maxY: activeTextInput.y + selectedFontSize }
+        };
+        setElements(prev => [...prev, newEl]);
+        channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
       }
     }
     setActiveTextInput(null);
@@ -403,6 +363,52 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     setElements([]);
     setSelectedId(null);
     channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !matchId || !currentUserId) return;
+
+    setIsUploading(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `shared/${matchId}/${fileName}`;
+
+      // Uploading to 'avatars' which is confirmed to exist in the earlier ProfileSetup code, 
+      // or 'assets' if available. We'll use 'avatars' as a safe path for now.
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath);
+
+      const newFile: SharedFile = {
+        id: Math.random().toString(36).substring(2),
+        name: file.name,
+        url: publicUrl,
+        size: file.size,
+        uploader_name: 'Me',
+        created_at: new Date().toISOString()
+      };
+
+      setSharedFiles(prev => [newFile, ...prev]);
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'file-shared',
+        payload: { file: newFile }
+      });
+    } catch (err: any) {
+      console.error("Upload failed:", err);
+      setErrorNotification("Upload failed. Verify storage configuration.");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const toggleScreenShare = async () => {
@@ -429,51 +435,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     if (!error) setMessageInput('');
   };
 
-  // Fixed missing handleFileUpload implementation
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !matchId || !currentUserId) return;
-
-    setIsUploading(true);
-    try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `shared/${matchId}/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('shared-files')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('shared-files')
-        .getPublicUrl(filePath);
-
-      const newFile: SharedFile = {
-        id: Math.random().toString(36).substring(2),
-        name: file.name,
-        url: publicUrl,
-        size: file.size,
-        uploader_name: 'Me',
-        created_at: new Date().toISOString()
-      };
-
-      setSharedFiles(prev => [...prev, newFile]);
-      channelRef.current?.send({
-        type: 'broadcast',
-        event: 'file-shared',
-        payload: { file: newFile }
-      });
-
-    } catch (err: any) {
-      console.error("Upload failed:", err);
-      setErrorNotification("File upload failed. Ensure the storage bucket exists.");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
   useEffect(() => {
     const initMedia = async () => {
       try {
@@ -488,6 +449,22 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
+  const getFileIcon = (name: string) => {
+    const ext = name.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return 'image';
+    if (['py', 'js', 'ts', 'tsx', 'html', 'css', 'json', 'cpp', 'java'].includes(ext || '')) return 'code';
+    if (['pdf', 'doc', 'docx', 'txt'].includes(ext || '')) return 'description';
+    return 'insert_drive_file';
+  };
 
   return (
     <div className="flex flex-col h-screen w-full bg-background-dark overflow-hidden font-display relative">
@@ -521,8 +498,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
           <div className="flex-1 relative rounded-3xl overflow-hidden bg-[#0d0f1a] border border-border-dark flex flex-col shadow-2xl">
             {mode === 'code' ? (
               <textarea
-                spellCheck={false}
-                value={code}
+                spellCheck={false} value={code}
                 onChange={(e) => {
                   const newCode = e.target.value;
                   setCode(newCode);
@@ -534,87 +510,20 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
               />
             ) : (
               <div className="flex-1 relative bg-white overflow-hidden">
-                <canvas 
-                  ref={canvasRef} 
-                  width={1600} 
-                  height={1200} 
-                  onMouseDown={handleStartInteraction}
-                  onMouseMove={handleMoveInteraction}
-                  onMouseUp={handleEndInteraction}
-                  onMouseLeave={handleEndInteraction}
-                  onTouchStart={handleStartInteraction}
-                  onTouchMove={handleMoveInteraction}
-                  onTouchEnd={handleEndInteraction}
-                  className={`w-full h-full ${drawingTool === 'pencil' ? 'cursor-crosshair' : drawingTool === 'text' ? 'cursor-text' : 'cursor-default'}`} 
-                />
-
+                <canvas ref={canvasRef} width={1600} height={1200} onMouseDown={handleStartInteraction} onMouseMove={handleMoveInteraction} onMouseUp={handleEndInteraction} onMouseLeave={handleEndInteraction} onTouchStart={handleStartInteraction} onTouchMove={handleMoveInteraction} onTouchEnd={handleEndInteraction} className={`w-full h-full ${drawingTool === 'pencil' ? 'cursor-crosshair' : drawingTool === 'text' ? 'cursor-text' : 'cursor-default'}`} />
                 {activeTextInput && (
-                  <textarea
-                    ref={textInputRef}
-                    value={currentTextValue}
-                    onChange={(e) => setCurrentTextValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        finalizeText();
-                      }
-                    }}
-                    onBlur={finalizeText}
-                    className="absolute bg-transparent border-none outline-none p-0 overflow-hidden resize-none whitespace-pre"
-                    style={{
-                      left: activeTextInput.x / (canvasRef.current?.width || 1) * 100 + '%',
-                      top: activeTextInput.y / (canvasRef.current?.height || 1) * 100 + '%',
-                      color: drawColor,
-                      fontSize: selectedFontSize + 'px',
-                      fontFamily: selectedFontFamily,
-                      lineHeight: '1',
-                      minWidth: '50px'
-                    }}
-                  />
+                  <textarea ref={textInputRef} value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }} onBlur={finalizeText} className="absolute bg-transparent border-none outline-none p-0 overflow-hidden resize-none whitespace-pre" style={{ left: activeTextInput.x / (canvasRef.current?.width || 1) * 100 + '%', top: activeTextInput.y / (canvasRef.current?.height || 1) * 100 + '%', color: drawColor, fontSize: selectedFontSize + 'px', fontFamily: selectedFontFamily, lineHeight: '1', minWidth: '50px' }} />
                 )}
-                
-                {/* Visual Drawing UI */}
                 <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#1a1d2d] p-3 rounded-2xl border border-white/10 shadow-2xl z-30">
-                   <button 
-                     onClick={() => setDrawingTool('pencil')} 
-                     className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'pencil' ? 'bg-primary text-white' : 'text-slate-400 hover:bg-white/5'}`}
-                   >
-                     <span className="material-symbols-outlined">edit</span>
-                   </button>
-                   <button 
-                     onClick={() => setDrawingTool('text')} 
-                     className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'text' ? 'bg-primary text-white' : 'text-slate-400 hover:bg-white/5'}`}
-                   >
-                     <span className="material-symbols-outlined">title</span>
-                   </button>
-                   <button 
-                     onClick={() => setDrawingTool('select')} 
-                     className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'select' ? 'bg-primary text-white' : 'text-slate-400 hover:bg-white/5'}`}
-                   >
-                     <span className="material-symbols-outlined">near_me</span>
-                   </button>
-
+                   <button onClick={() => setDrawingTool('pencil')} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'pencil' ? 'bg-primary text-white shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}><span className="material-symbols-outlined">edit</span></button>
+                   <button onClick={() => setDrawingTool('text')} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'text' ? 'bg-primary text-white shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}><span className="material-symbols-outlined">title</span></button>
+                   <button onClick={() => setDrawingTool('select')} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === 'select' ? 'bg-primary text-white shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}><span className="material-symbols-outlined">near_me</span></button>
                    {drawingTool === 'text' && (
                      <div className="flex flex-col gap-2 mt-2 p-2 bg-black/20 rounded-lg">
-                       <select 
-                         value={selectedFontSize} 
-                         onChange={(e) => setSelectedFontSize(Number(e.target.value))}
-                         className="bg-transparent text-[10px] text-white border-none p-0 outline-none"
-                       >
-                         {[12, 16, 24, 32, 48, 64].map(sz => <option key={sz} value={sz}>{sz}px</option>)}
-                       </select>
-                       <select 
-                         value={selectedFontFamily} 
-                         onChange={(e) => setSelectedFontFamily(e.target.value)}
-                         className="bg-transparent text-[10px] text-white border-none p-0 outline-none"
-                       >
-                         <option value={SANS_FONT}>Sans</option>
-                         <option value={SERIF_FONT}>Serif</option>
-                         <option value={MONO_FONT}>Mono</option>
-                       </select>
+                       <select value={selectedFontSize} onChange={(e) => setSelectedFontSize(Number(e.target.value))} className="bg-transparent text-[10px] text-white border-none p-0 outline-none">{[12, 16, 24, 32, 48, 64].map(sz => <option key={sz} value={sz}>{sz}px</option>)}</select>
+                       <select value={selectedFontFamily} onChange={(e) => setSelectedFontFamily(e.target.value)} className="bg-transparent text-[10px] text-white border-none p-0 outline-none"><option value={SANS_FONT}>Sans</option><option value={SERIF_FONT}>Serif</option><option value={MONO_FONT}>Mono</option></select>
                      </div>
                    )}
-
                    <div className="h-px w-full bg-white/10 my-1"></div>
                    <button onClick={() => setDrawColor('#0d33f2')} className={`size-8 rounded-full border-2 ${drawColor === '#0d33f2' ? 'border-white scale-110' : 'border-transparent'}`} style={{ backgroundColor: '#0d33f2' }}></button>
                    <button onClick={() => setDrawColor('#ef4444')} className={`size-8 rounded-full border-2 ${drawColor === '#ef4444' ? 'border-white scale-110' : 'border-transparent'}`} style={{ backgroundColor: '#ef4444' }}></button>
@@ -624,7 +533,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
                 </div>
               </div>
             )}
-
             <div className="absolute bottom-6 left-6 flex gap-4 z-20 pointer-events-none">
               {isScreenSharing && <div className="w-64 aspect-video bg-black rounded-2xl border-2 border-primary overflow-hidden shadow-glow pointer-events-auto"><video ref={screenVideoRef} autoPlay playsInline className="w-full h-full object-cover" /></div>}
               <div className="w-48 aspect-video bg-[#0a0c16] rounded-2xl border-2 border-primary overflow-hidden relative shadow-glow pointer-events-auto flex items-center justify-center">
@@ -637,7 +545,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
               </div>
             </div>
           </div>
-          
           <div className="flex justify-center pb-6">
             <div className="flex items-center gap-3 bg-[#1a1d2d]/95 backdrop-blur-xl border border-white/5 p-3 rounded-2xl shadow-2xl">
               <button onClick={() => setIsMuted(!isMuted)} className={`size-12 flex items-center justify-center rounded-xl transition-all ${isMuted ? 'bg-red-600 text-white shadow-glow' : 'bg-slate-800 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
@@ -647,10 +554,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
           </div>
         </div>
 
-        <aside className="w-[400px] h-full border-l border-border-dark flex flex-col bg-[#0b0c14]">
+        <aside className="w-[400px] h-full border-l border-border-dark flex flex-col bg-[#0b0c14] relative">
           <div className="flex border-b border-white/5 bg-black/20">
-             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'chat' ? 'text-primary bg-primary/5' : 'text-slate-500 hover:text-white'}`}>Session Chat</button>
-             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary bg-primary/5' : 'text-slate-500 hover:text-white'}`}>Shared Files</button>
+             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'chat' ? 'text-primary bg-primary/5 border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Session Chat</button>
+             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary bg-primary/5 border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Shared Files</button>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar">
             {sidebarTab === 'chat' ? (
@@ -664,24 +571,61 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
               </div>
             ) : (
               <div className="p-6 space-y-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Shared Assets</h4>
-                  <button onClick={() => fileInputRef.current?.click()} className="text-primary text-[10px] font-black uppercase tracking-widest hover:underline">Upload</button>
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h4 className="text-white text-sm font-bold">Collaborative Assets</h4>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Shared for this session</p>
+                  </div>
+                  <button onClick={() => fileInputRef.current?.click()} className="h-9 px-4 bg-primary/10 border border-primary/20 text-primary text-[10px] font-black uppercase tracking-widest rounded-lg hover:bg-primary hover:text-white transition-all flex items-center gap-2">
+                    <span className="material-symbols-outlined !text-sm">upload</span>
+                    Share File
+                  </button>
                   <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
                 </div>
-                {sharedFiles.map(file => (
-                    <div key={file.id} className="p-4 bg-white/5 border border-white/5 rounded-2xl flex items-center gap-3">
-                       <div className="flex-1 min-w-0"><p className="text-white text-xs font-bold truncate">{file.name}</p></div>
-                       <a href={file.url} download target="_blank" className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-slate-500"><span className="material-symbols-outlined text-sm">download</span></a>
+                
+                {isUploading && (
+                  <div className="p-4 bg-primary/5 border border-primary/20 rounded-2xl flex items-center gap-3 animate-pulse">
+                    <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary"><span className="material-symbols-outlined animate-spin text-sm">sync</span></div>
+                    <div>
+                      <p className="text-white text-xs font-bold">Transmitting File...</p>
+                      <p className="text-[9px] font-black text-primary uppercase">Peer synchronization active</p>
                     </div>
-                ))}
+                  </div>
+                )}
+
+                {sharedFiles.length === 0 && !isUploading ? (
+                  <div className="py-20 text-center flex flex-col items-center">
+                    <div className="size-20 rounded-full bg-white/5 flex items-center justify-center text-slate-700 mb-4 border border-dashed border-white/10"><span className="material-symbols-outlined !text-4xl">folder_open</span></div>
+                    <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest">No assets shared yet</p>
+                    <p className="text-[8px] font-medium text-slate-700 uppercase tracking-tight mt-1">Upload items to sync with your partner</p>
+                  </div>
+                ) : (
+                  sharedFiles.map(file => (
+                    <div key={file.id} className="p-4 bg-white/5 border border-white/5 rounded-2xl flex items-center gap-4 hover:border-primary/40 hover:bg-white/10 transition-all group">
+                       <div className="size-12 rounded-xl bg-black/40 flex items-center justify-center text-slate-500 group-hover:text-primary transition-colors border border-white/5 shadow-inner">
+                          <span className="material-symbols-outlined !text-2xl">{getFileIcon(file.name)}</span>
+                       </div>
+                       <div className="flex-1 min-w-0">
+                          <p className="text-white text-xs font-bold truncate mb-0.5">{file.name}</p>
+                          <div className="flex items-center gap-2">
+                             <span className="text-[9px] font-black text-slate-500 uppercase">{formatFileSize(file.size)}</span>
+                             <span className="size-1 rounded-full bg-slate-700"></span>
+                             <span className="text-[9px] font-black text-primary uppercase tracking-tight">{file.uploader_name}</span>
+                          </div>
+                       </div>
+                       <a href={file.url} download target="_blank" className="size-9 rounded-xl bg-white/5 flex items-center justify-center text-slate-500 hover:bg-primary hover:text-white transition-all shadow-sm">
+                          <span className="material-symbols-outlined text-sm">download</span>
+                       </a>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
           {sidebarTab === 'chat' && (
-            <div className="p-6 border-t border-white/5 flex gap-2">
-              <input type="text" value={messageInput} onChange={(e) => setMessageInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Message..." className="flex-1 bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm text-white outline-none" />
-              <button onClick={sendMessage} className="size-12 bg-primary text-white rounded-xl flex items-center justify-center shadow-glow"><span className="material-symbols-outlined">send</span></button>
+            <div className="p-6 border-t border-white/5 flex gap-2 bg-black/20">
+              <input type="text" value={messageInput} onChange={(e) => setMessageInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Message partner..." className="flex-1 bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-primary outline-none transition-all placeholder:text-slate-700" />
+              <button onClick={sendMessage} className="size-12 bg-primary text-white rounded-xl flex items-center justify-center shadow-glow hover:scale-105 active:scale-95 transition-all"><span className="material-symbols-outlined">send</span></button>
             </div>
           )}
         </aside>
