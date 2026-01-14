@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { ChatMessage, UserProfile, SharedFile } from '../types';
@@ -12,7 +13,7 @@ interface Props {
 interface Point { x: number; y: number; }
 interface CanvasElement {
   id: string;
-  type: 'stroke' | 'text';
+  type: 'stroke' | 'text' | 'rect' | 'circle' | 'eraser';
   points?: Point[];
   text?: string;
   fontFamily?: string;
@@ -30,11 +31,11 @@ const MONO_FONT = '"JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, mo
 const SANS_FONT = '"Space Grotesk", sans-serif';
 
 const LANGUAGES = [
-  { id: 'python', name: 'Python', color: '#3776ab', icon: 'terminal', glow: 'rgba(55, 118, 171, 0.4)' },
-  { id: 'javascript', name: 'JavaScript', color: '#f7df1e', icon: 'javascript', glow: 'rgba(247, 223, 30, 0.4)' },
-  { id: 'typescript', name: 'TypeScript', color: '#3178c6', icon: 'code', glow: 'rgba(49, 120, 198, 0.4)' },
-  { id: 'cpp', name: 'C++', color: '#659ad2', icon: 'settings', glow: 'rgba(101, 154, 210, 0.4)' },
-  { id: 'html', name: 'HTML/CSS', color: '#e34f26', icon: 'html', glow: 'rgba(227, 79, 38, 0.4)' }
+  { id: 'python', name: 'Python', color: '#3776ab', icon: 'terminal' },
+  { id: 'javascript', name: 'JavaScript', color: '#f7df1e', icon: 'javascript' },
+  { id: 'typescript', name: 'TypeScript', color: '#3178c6', icon: 'code' },
+  { id: 'cpp', name: 'C++', color: '#659ad2', icon: 'settings' },
+  { id: 'html', name: 'HTML/CSS', color: '#e34f26', icon: 'html' }
 ];
 
 const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
@@ -67,34 +68,20 @@ const highlightCode = (code: string, language: string) => {
       { regex: /\b(def|return|if|elif|else|for|while|import|from|class|as|with|try|except|finally|pass|in|is|not|and|or|lambda|None|True|False)\b/g, class: 'text-[#569cd6]' },
       { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
       { regex: /\b(print|len|range|enumerate|zip|dict|list|set|str|int|float|open)\b/g, class: 'text-[#4ec9b0]' },
-    ],
-    cpp: [
-      { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' },
-      { regex: /\b(int|double|float|char|void|if|else|for|while|return|class|public|private|protected|template|typename|using|namespace|include|define)\b/g, class: 'text-[#569cd6]' },
-      { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
-      { regex: /#\w+/g, class: 'text-[#c586c0]' },
-    ],
-    html: [
-      { regex: /(&lt;!--[\s\S]*?--&gt;)/g, class: 'text-[#6a9955] italic' },
-      { regex: /(&lt;\/?[a-z1-6]+)/gi, class: 'text-[#569cd6]' },
-      { regex: /([a-z-]+)(?==)/gi, class: 'text-[#9cdcfe]' },
-      { regex: /&gt;/g, class: 'text-[#569cd6]' },
     ]
   };
 
   const langPatterns = patterns[language] || patterns.javascript;
   const allPatterns = [...langPatterns, ...patterns.common];
-
   allPatterns.forEach(p => {
     html = html.replace(p.regex, (match) => `<span class="${p.class}">${match}</span>`);
   });
-
   return html;
 };
 
 type SessionMode = 'code' | 'draw';
 type SidebarTab = 'chat' | 'files';
-type DrawingTool = 'pencil' | 'text';
+type DrawingTool = 'pencil' | 'text' | 'rect' | 'circle' | 'eraser';
 
 const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEnd }) => {
   const [mode, setMode] = useState<SessionMode>('code');
@@ -116,16 +103,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const [errorNotification, setErrorNotification] = useState<string | null>(null);
   
   const [elements, setElements] = useState<CanvasElement[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawColor, setDrawColor] = useState('#0d33f2');
-  const [lineWidth] = useState(3);
-  
   const [activeTextInput, setActiveTextInput] = useState<{ x: number, y: number, id: string } | null>(null);
   const [currentTextValue, setCurrentTextValue] = useState('');
 
   const isInteractingRef = useRef(false);
-  const lastMousePosRef = useRef<Point>({ x: 0, y: 0 });
   const currentStrokeRef = useRef<Point[]>([]);
+  const startPosRef = useRef<Point>({ x: 0, y: 0 });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const partnerVideoRef = useRef<HTMLVideoElement>(null);
@@ -173,8 +157,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
 
   useEffect(() => {
     if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => { track.enabled = !isMuted; });
-      streamRef.current.getVideoTracks().forEach(track => { track.enabled = !isVideoOff; });
+      const audioTracks = streamRef.current.getAudioTracks();
+      const videoTracks = streamRef.current.getVideoTracks();
+      audioTracks.forEach(track => { track.enabled = !isMuted; });
+      videoTracks.forEach(track => { track.enabled = !isVideoOff; });
       channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff } });
     }
   }, [isMuted, isVideoOff]);
@@ -191,7 +177,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         setChatMessages(prev => [...prev, payload.payload]);
       })
       .on('broadcast', { event: 'element-added' }, (payload) => setElements(prev => [...prev, payload.payload.element]))
-      .on('broadcast', { event: 'clear-canvas' }, () => { setElements([]); setSelectedId(null); })
+      .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
       .on('broadcast', { event: 'file-shared' }, (payload) => setSharedFiles(prev => [payload.payload.file, ...prev]))
       .on('broadcast', { event: 'media-update' }, (payload) => setPartnerMediaStatus(payload.payload));
 
@@ -211,7 +197,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       sender: 'user',
       name: 'Me',
       text: messageInput.trim(),
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
     setChatMessages(prev => [...prev, newMessage]);
     channelRef.current.send({
@@ -227,9 +213,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!file || !currentUserId || !matchId) return;
     setIsUploading(true);
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random()}.${fileExt}`;
-      const filePath = `${matchId}/${fileName}`;
+      const fileName = `${Date.now()}-${file.name}`;
+      const filePath = `shared/${matchId}/${fileName}`;
       const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, file);
       if (uploadError) throw uploadError;
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(filePath);
@@ -243,6 +228,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       };
       setSharedFiles(prev => [sharedFile, ...prev]);
       channelRef.current?.send({ type: 'broadcast', event: 'file-shared', payload: { file: sharedFile } });
+      setErrorNotification("File shared successfully!");
     } catch (err: any) {
       setErrorNotification("Failed to upload file.");
     } finally {
@@ -278,15 +264,29 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     elements.forEach(el => {
       ctx.save();
-      const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
-      const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
-      ctx.translate(el.translateX + centerX, el.translateY + centerY);
+      ctx.translate(el.translateX, el.translateY);
       ctx.rotate(el.rotation);
       ctx.scale(el.scale, el.scale);
-      ctx.translate(-centerX, -centerY);
-      if (el.type === 'stroke' && el.points) {
-        ctx.strokeStyle = el.color; ctx.lineWidth = el.width; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.beginPath(); el.points.forEach((pt, i) => { if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
+      ctx.strokeStyle = el.type === 'eraser' ? '#ffffff' : el.color;
+      ctx.lineWidth = el.width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if (el.type === 'stroke' || el.type === 'eraser') {
+        if (el.points) {
+          ctx.beginPath();
+          el.points.forEach((pt, i) => { if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
+          ctx.stroke();
+        }
+      } else if (el.type === 'rect') {
+        ctx.strokeRect(el.bbox.minX, el.bbox.minY, el.bbox.maxX - el.bbox.minX, el.bbox.maxY - el.bbox.minY);
+      } else if (el.type === 'circle') {
+        const rx = (el.bbox.maxX - el.bbox.minX) / 2;
+        const ry = (el.bbox.maxY - el.bbox.minY) / 2;
+        const cx = el.bbox.minX + rx;
+        const cy = el.bbox.minY + ry;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, Math.abs(rx), Math.abs(ry), 0, 0, 2 * Math.PI);
         ctx.stroke();
       } else if (el.type === 'text' && el.text) {
         ctx.fillStyle = el.color; ctx.font = `${el.fontSize || 24}px ${el.fontFamily || SANS_FONT}`; ctx.textBaseline = 'top';
@@ -303,9 +303,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!rect) return;
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    if (drawingTool === 'pencil') {
+    startPosRef.current = { x, y };
+    if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       isInteractingRef.current = true;
       currentStrokeRef.current = [{ x, y }];
+    } else if (drawingTool === 'rect' || drawingTool === 'circle') {
+      isInteractingRef.current = true;
     } else if (drawingTool === 'text') {
       setActiveTextInput({ x, y, id: Math.random().toString() });
       setCurrentTextValue('');
@@ -318,36 +321,67 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!rect) return;
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    if (drawingTool === 'pencil') {
+    const ctx = canvasRef.current?.getContext('2d');
+    if (!ctx) return;
+
+    if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       currentStrokeRef.current.push({ x, y });
-      const ctx = canvasRef.current?.getContext('2d');
-      if (ctx) {
-        ctx.strokeStyle = drawColor; ctx.lineWidth = 3; ctx.lineCap = 'round';
-        ctx.beginPath();
-        const pts = currentStrokeRef.current;
-        const last = pts[pts.length - 2];
-        if (last) { ctx.moveTo(last.x, last.y); ctx.lineTo(x, y); ctx.stroke(); }
-      }
+      ctx.strokeStyle = drawingTool === 'eraser' ? '#ffffff' : drawColor;
+      ctx.lineWidth = drawingTool === 'eraser' ? 20 : 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      const last = currentStrokeRef.current[currentStrokeRef.current.length - 2];
+      if (last) { ctx.moveTo(last.x, last.y); ctx.lineTo(x, y); ctx.stroke(); }
+    } else if (drawingTool === 'rect') {
+      renderCanvas();
+      ctx.strokeStyle = drawColor; ctx.lineWidth = 3;
+      ctx.strokeRect(startPosRef.current.x, startPosRef.current.y, x - startPosRef.current.x, y - startPosRef.current.y);
+    } else if (drawingTool === 'circle') {
+      renderCanvas();
+      ctx.strokeStyle = drawColor; ctx.lineWidth = 3;
+      const rx = (x - startPosRef.current.x) / 2;
+      const ry = (y - startPosRef.current.y) / 2;
+      const cx = startPosRef.current.x + rx;
+      const cy = startPosRef.current.y + ry;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, Math.abs(rx), Math.abs(ry), 0, 0, 2 * Math.PI);
+      ctx.stroke();
     }
   };
 
-  const handleMouseUp = () => {
-    if (drawingTool === 'pencil' && isInteractingRef.current) {
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (!isInteractingRef.current) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    let newEl: CanvasElement | null = null;
+
+    if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       const pts = currentStrokeRef.current;
-      const minX = Math.min(...pts.map(p => p.x));
-      const maxX = Math.max(...pts.map(p => p.x));
-      const minY = Math.min(...pts.map(p => p.y));
-      const maxY = Math.max(...pts.map(p => p.y));
-      const newEl: CanvasElement = {
+      newEl = {
         id: Math.random().toString(),
-        type: 'stroke',
+        type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
         points: pts,
+        color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
+        width: drawingTool === 'eraser' ? 20 : 3,
+        translateX: 0, translateY: 0, rotation: 0, scale: 1,
+        bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) }
+      };
+    } else if (drawingTool === 'rect' || drawingTool === 'circle') {
+      newEl = {
+        id: Math.random().toString(),
+        type: drawingTool,
         color: drawColor,
         width: 3,
         translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX, minY, maxX, maxY }
+        bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
       };
-      setElements(prev => [...prev, newEl]);
+    }
+
+    if (newEl) {
+      setElements(prev => [...prev, newEl!]);
       channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
     }
     isInteractingRef.current = false;
@@ -372,19 +406,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
     setActiveTextInput(null);
   };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const start = editorRef.current?.selectionStart || 0;
-      const end = editorRef.current?.selectionEnd || 0;
-      const newVal = code.substring(0, start) + "  " + code.substring(end);
-      setCode(newVal);
-      setTimeout(() => { if (editorRef.current) editorRef.current.selectionStart = editorRef.current.selectionEnd = start + 2; }, 0);
-    }
-  };
-
-  const activeLang = LANGUAGES.find(l => l.id === selectedLang) || LANGUAGES[0];
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#1e1e1e] overflow-hidden font-display relative">
@@ -411,9 +432,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         <div className="flex items-center gap-6">
            <div className="flex items-center gap-3 px-4 py-2 bg-white/5 rounded-xl border border-white/10">
               <span className="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Network Connected</span>
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Live Syncing</span>
            </div>
-           <button onClick={onEnd} className="bg-red-600/10 text-red-500 border border-red-500/20 text-[10px] font-black h-10 px-8 rounded-xl hover:bg-red-500 hover:text-white transition-all uppercase tracking-[0.2em]">Leave Session</button>
+           <button onClick={onEnd} className="bg-red-600/10 text-red-500 border border-red-500/20 text-[10px] font-black h-10 px-8 rounded-xl hover:bg-red-500 hover:text-white transition-all uppercase tracking-[0.2em]">End Session</button>
         </div>
       </header>
 
@@ -425,100 +446,47 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                 <div className="h-12 flex items-center justify-between px-6 bg-[#252526] border-b border-[#333]">
                    <div className="flex items-center gap-4">
                       <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined !text-lg text-slate-500">{activeLang.icon}</span>
-                        <select 
-                          value={selectedLang} 
-                          onChange={(e) => {
-                            const newLang = e.target.value;
-                            setSelectedLang(newLang);
-                            channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code, lang: newLang } });
-                          }}
-                          className="bg-transparent text-slate-300 text-[11px] font-bold border-none p-0 outline-none cursor-pointer hover:text-white transition-colors appearance-none"
-                        >
+                        <span className="material-symbols-outlined !text-lg text-slate-500">terminal</span>
+                        <select value={selectedLang} onChange={(e) => setSelectedLang(e.target.value)} className="bg-transparent text-slate-300 text-[11px] font-bold border-none outline-none cursor-pointer">
                            {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#252526]">{lang.name}</option>)}
                         </select>
                       </div>
                    </div>
-                   <div className="flex items-center gap-3">
-                      <button onClick={() => { navigator.clipboard.writeText(code); setErrorNotification("Copied to clipboard!"); }} className="text-slate-400 hover:text-white transition-all">
-                        <span className="material-symbols-outlined !text-lg">content_copy</span>
-                      </button>
-                   </div>
                 </div>
-
-                <div className="flex-1 relative flex overflow-hidden">
-                   <div className="w-12 bg-[#1e1e1e] flex flex-col items-end pr-3 pt-6 text-[12px] font-mono text-[#858585] select-none border-r border-[#333]">
-                      {code.split('\n').map((_, i) => <div key={i} className="h-6 leading-6">{i + 1}</div>)}
-                   </div>
-                   <div className="flex-1 relative bg-[#1e1e1e] overflow-hidden">
-                      <pre 
-                        ref={preRef}
-                        aria-hidden="true"
-                        className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words font-mono text-[14px] leading-6 overflow-hidden"
-                        style={{ fontFamily: MONO_FONT }}
-                        dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) + '\n' }}
-                      />
-                      <textarea
-                        ref={editorRef}
-                        spellCheck={false}
-                        value={code}
-                        onScroll={syncScroll}
-                        onKeyDown={handleKeyDown}
-                        onChange={(e) => {
-                          const newCode = e.target.value;
-                          setCode(newCode);
-                          channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: newCode, lang: selectedLang } });
-                        }}
-                        className="absolute inset-0 p-6 bg-transparent text-transparent caret-white font-mono text-[14px] leading-6 resize-none outline-none overflow-auto custom-scrollbar whitespace-pre-wrap break-words border-none"
-                        style={{ fontFamily: MONO_FONT }}
-                      />
-                   </div>
+                <div className="flex-1 relative bg-[#1e1e1e] overflow-hidden">
+                   <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words font-mono text-[14px] leading-6 overflow-hidden" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) + '\n' }} />
+                   <textarea ref={editorRef} spellCheck={false} value={code} onScroll={syncScroll} onChange={(e) => { setCode(e.target.value); channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); }} className="absolute inset-0 p-6 bg-transparent text-transparent caret-white font-mono text-[14px] leading-6 resize-none outline-none overflow-auto whitespace-pre-wrap break-words border-none" />
                 </div>
               </div>
             ) : (
               <div className="flex-1 relative bg-white overflow-hidden">
-                <canvas 
-                  ref={canvasRef} 
-                  width={1600} 
-                  height={1200} 
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  className="w-full h-full cursor-crosshair" 
-                />
+                <canvas ref={canvasRef} width={2000} height={2000} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className="w-full h-full cursor-crosshair" />
                 {activeTextInput && (
-                  <textarea
-                    ref={textInputRef}
-                    autoFocus
-                    value={currentTextValue}
-                    onChange={(e) => setCurrentTextValue(e.target.value)}
-                    onBlur={finalizeText}
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && finalizeText()}
-                    className="absolute bg-transparent border border-primary outline-none p-1 text-2xl"
-                    style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: SANS_FONT, color: drawColor }}
-                  />
+                  <textarea ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} onBlur={finalizeText} className="absolute bg-transparent border border-primary outline-none p-1 text-2xl" style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: SANS_FONT, color: drawColor }} />
                 )}
                 <div className="absolute top-8 left-8 flex flex-col gap-3 bg-[#1a1d2d]/90 backdrop-blur-2xl p-4 rounded-2xl border border-white/10 shadow-2xl z-40">
-                   <button onClick={() => setDrawingTool('pencil')} className={`size-10 flex items-center justify-center rounded-lg transition-all ${drawingTool === 'pencil' ? 'bg-primary text-white' : 'text-slate-400'}`}><span className="material-symbols-outlined !text-xl">edit</span></button>
-                   <button onClick={() => setDrawingTool('text')} className={`size-10 flex items-center justify-center rounded-lg transition-all ${drawingTool === 'text' ? 'bg-primary text-white' : 'text-slate-400'}`}><span className="material-symbols-outlined !text-xl">title</span></button>
+                   {['pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
+                     <button key={tool} onClick={() => setDrawingTool(tool as DrawingTool)} className={`size-10 flex items-center justify-center rounded-lg transition-all ${drawingTool === tool ? 'bg-primary text-white' : 'text-slate-400 hover:bg-white/5'}`}>
+                       <span className="material-symbols-outlined !text-xl">{tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span>
+                     </button>
+                   ))}
                    <div className="h-px w-full bg-white/10"></div>
-                   <button onClick={() => setDrawColor('#0d33f2')} className="size-6 rounded-full bg-primary border-2 border-white"></button>
-                   <button onClick={() => setDrawColor('#ef4444')} className="size-6 rounded-full bg-red-500 border-2 border-transparent"></button>
-                   <button onClick={() => { setElements([]); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-400 hover:text-white transition-all"><span className="material-symbols-outlined">delete</span></button>
+                   <button onClick={() => { setElements([]); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-400 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete</span></button>
                 </div>
               </div>
             )}
 
             <div className="absolute bottom-6 right-6 flex flex-col gap-4 z-40">
-               <div className="w-48 aspect-video bg-black rounded-2xl border border-primary overflow-hidden relative shadow-2xl group">
+               <div className="w-56 aspect-video bg-black rounded-2xl border-2 border-primary/40 overflow-hidden relative shadow-2xl">
                   {partnerMediaStatus.isVideoOff ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-slate-900"><span className="material-symbols-outlined text-slate-600">person_off</span></div>
                   ) : (
                     <video ref={partnerVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
                   )}
                   <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/50 backdrop-blur-md rounded text-[8px] font-bold text-white uppercase tracking-widest">{partner?.name || 'Partner'}</div>
+                  {partnerMediaStatus.isMuted && <div className="absolute top-2 right-2 bg-red-600 size-5 rounded-full flex items-center justify-center"><span className="material-symbols-outlined text-white !text-xs">mic_off</span></div>}
                </div>
-               <div className="w-40 aspect-video bg-black rounded-2xl border border-emerald-500 overflow-hidden relative shadow-2xl">
+               <div className="w-48 aspect-video bg-black rounded-2xl border-2 border-white/10 overflow-hidden relative shadow-2xl">
                   {isVideoOff ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-slate-900"><span className="material-symbols-outlined text-slate-600 text-sm">visibility_off</span></div>
                   ) : (
@@ -529,47 +497,53 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
             </div>
 
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#252526] border border-[#333] p-3 rounded-2xl shadow-2xl z-40">
-               <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white' : 'bg-white/5 text-slate-400'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
-               <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white' : 'bg-white/5 text-slate-400'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
-               <button onClick={toggleScreenShare} className={`px-6 h-12 rounded-xl flex items-center gap-2 text-[10px] font-black uppercase tracking-widest transition-all ${isScreenSharing ? 'bg-primary text-white' : 'bg-white/5 text-slate-400'}`}><span className="material-symbols-outlined text-lg">screen_share</span> {isScreenSharing ? 'Stop' : 'Share'}</button>
+               <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
+               <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
+               <button onClick={toggleScreenShare} className={`px-6 h-12 rounded-xl flex items-center gap-2 text-[10px] font-black uppercase tracking-widest transition-all ${isScreenSharing ? 'bg-primary text-white' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined text-lg">screen_share</span> {isScreenSharing ? 'Sharing' : 'Screen'}</button>
             </div>
           </div>
         </div>
 
         <aside className="w-80 h-full border-l border-[#333] flex flex-col bg-[#252526]">
           <div className="flex border-b border-[#333]">
-             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'chat' ? 'text-primary' : 'text-slate-500'}`}>Chat</button>
-             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary' : 'text-slate-500'}`}>Files</button>
+             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'chat' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Chat</button>
+             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Files</button>
           </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-             {sidebarTab === 'chat' ? (
-               <div className="space-y-4">
-                 {chatMessages.map((msg, i) => (
-                   <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
-                      <span className="text-[9px] font-bold text-slate-500 mb-1">{msg.name}</span>
-                      <div className={`px-4 py-2 rounded-xl text-sm ${msg.sender === 'user' ? 'bg-primary text-white' : 'bg-white/5 text-slate-300'}`}>{msg.text}</div>
-                   </div>
-                 ))}
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4">
+             {sidebarTab === 'chat' ? chatMessages.map((msg, i) => (
+               <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-1`}>
+                  <div className="flex items-center gap-2 mb-1 px-1">
+                    <span className="text-[9px] font-black uppercase text-slate-600">{msg.name}</span>
+                    <span className="text-[8px] font-medium text-slate-700">{msg.timestamp}</span>
+                  </div>
+                  <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none' : 'bg-white/5 text-slate-300 rounded-tl-none border border-white/5'}`}>
+                    {msg.text}
+                  </div>
                </div>
-             ) : (
+             )) : (
                <div className="space-y-4">
-                  <button onClick={() => fileInputRef.current?.click()} className="w-full py-4 border-2 border-dashed border-[#333] rounded-2xl text-slate-500 text-[10px] font-black uppercase tracking-widest hover:border-primary transition-all">Upload File</button>
+                  <button onClick={() => fileInputRef.current?.click()} className="w-full py-6 border-2 border-dashed border-[#333] rounded-2xl text-slate-500 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all">
+                    {isUploading ? 'Uploading...' : 'Upload Expert File'}
+                  </button>
                   <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
                   {sharedFiles.map(file => (
-                    <div key={file.id} className="p-3 bg-white/5 rounded-xl border border-[#333] flex items-center gap-3">
-                       <span className="material-symbols-outlined text-slate-500">description</span>
-                       <div className="flex-1 min-w-0 font-bold text-white text-xs truncate">{file.name}</div>
-                       <a href={file.url} download className="text-primary hover:text-white"><span className="material-symbols-outlined !text-lg">download</span></a>
+                    <div key={file.id} className="p-4 bg-white/5 rounded-2xl border border-white/5 flex items-center gap-3 group">
+                       <span className="material-symbols-outlined text-primary group-hover:scale-110 transition-transform">description</span>
+                       <div className="flex-1 min-w-0">
+                         <div className="font-bold text-white text-[11px] truncate uppercase">{file.name}</div>
+                         <div className="text-[9px] font-black text-slate-600 uppercase">{(file.size / 1024).toFixed(1)} KB</div>
+                       </div>
+                       <a href={file.url} download className="text-slate-500 hover:text-primary transition-colors"><span className="material-symbols-outlined !text-lg">download</span></a>
                     </div>
                   ))}
                </div>
              )}
           </div>
           {sidebarTab === 'chat' && (
-            <div className="p-6 border-t border-[#333]">
+            <div className="p-4 border-t border-[#333]">
                <div className="flex gap-2">
-                 <input value={messageInput} onChange={(e) => setMessageInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Send message..." className="flex-1 bg-white/5 border border-[#333] rounded-xl px-4 py-2 text-sm text-white focus:border-primary outline-none" />
-                 <button onClick={sendMessage} className="size-10 bg-primary text-white rounded-xl flex items-center justify-center"><span className="material-symbols-outlined !text-lg">send</span></button>
+                 <input value={messageInput} onChange={(e) => setMessageInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Type message..." className="flex-1 bg-black/20 border border-[#333] rounded-xl px-4 py-2.5 text-sm text-white focus:border-primary outline-none transition-all" />
+                 <button onClick={sendMessage} className="size-10 bg-primary text-white rounded-xl flex items-center justify-center hover:brightness-110 active:scale-95 transition-all"><span className="material-symbols-outlined !text-lg">send</span></button>
                </div>
             </div>
           )}
