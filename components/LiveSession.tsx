@@ -150,7 +150,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(console.error);
+        }
       } catch (err) {
         console.error("Failed to get media", err);
         setErrorNotification("Camera/Mic access denied.");
@@ -168,7 +171,15 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       const videoTracks = streamRef.current.getVideoTracks();
       audioTracks.forEach(track => { track.enabled = !isMuted; });
       videoTracks.forEach(track => { track.enabled = !isVideoOff; });
-      channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff } });
+      channelRef.current?.send({ 
+        type: 'broadcast', 
+        event: 'media-update', 
+        payload: { isMuted, isVideoOff } 
+      });
+      // Ensure local video element remains active if tracks are re-enabled
+      if (!isVideoOff && videoRef.current && videoRef.current.paused) {
+        videoRef.current.play().catch(console.error);
+      }
     }
   }, [isMuted, isVideoOff]);
 
@@ -213,10 +224,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     channelRef.current.send({
       type: 'broadcast',
       event: 'chat-message',
-      payload: { ...newMessage, sender: 'partner' }
+      payload: { ...newMessage, sender: 'partner', name: partner?.name || 'Partner' }
     });
     setMessageInput('');
-  }, [messageInput, currentUserId]);
+  }, [messageInput, currentUserId, partner]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -284,7 +295,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       ctx.translate(-centerX, -centerY);
       
       ctx.strokeStyle = el.type === 'eraser' ? '#ffffff' : el.color;
-      ctx.lineWidth = el.width;
+      ctx.lineWidth = el.type === 'eraser' ? 20 : 3;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -334,7 +345,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         
         ctx.setLineDash([]);
         ctx.fillStyle = '#0d33f2';
+        // Resize handle
         ctx.fillRect(el.bbox.maxX + 2, el.bbox.maxY + 2, 8, 8);
+        // Rotate handle
         ctx.beginPath();
         ctx.arc(centerX, el.bbox.minY - 20, 5, 0, Math.PI * 2);
         ctx.fill();
@@ -358,12 +371,16 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         if (el) {
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          
+          // Check rotate handle
           if (Math.hypot(x - centerX, y - (el.bbox.minY - 20 + el.translateY)) < 20) {
             transformModeRef.current = 'rotate';
             initialTransformRef.current = { ...el };
             isInteractingRef.current = true;
             return;
           }
+          
+          // Check resize handle
           if (Math.hypot(x - (el.bbox.maxX + el.translateX), y - (el.bbox.maxY + el.translateY)) < 20) {
             transformModeRef.current = 'resize';
             initialTransformRef.current = { ...el };
@@ -373,6 +390,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         }
       }
 
+      // Hit test elements
       const hit = elements.slice().reverse().find(el => {
         const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
         const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
@@ -412,17 +430,15 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isInteractingRef.current) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
 
-    if (drawingTool === 'select' && selectedId) {
+    if (drawingTool === 'select' && selectedId && isInteractingRef.current) {
       const dx = x - startPosRef.current.x;
       const dy = y - startPosRef.current.y;
+      
       setElements(prev => prev.map(el => {
         if (el.id !== selectedId) return el;
         if (transformModeRef.current === 'move') {
@@ -439,12 +455,16 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
           const distStart = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY);
           const distNow = Math.hypot(x - centerX, y - centerY);
-          return { ...el, scale: initialTransformRef.current.scale * (distNow / distStart) };
+          return { ...el, scale: initialTransformRef.current.scale * (distNow / (distStart || 1)) };
         }
         return el;
       }));
       return;
     }
+
+    if (!isInteractingRef.current) return;
+    const ctx = canvasRef.current?.getContext('2d');
+    if (!ctx) return;
 
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       currentStrokeRef.current.push({ x, y });
@@ -525,7 +545,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!activeTextInput || !currentTextValue.trim()) { setActiveTextInput(null); return; }
     const { x, y } = activeTextInput;
     
-    // Rough estimate of text bounding box
     const lines = currentTextValue.split('\n');
     const height = lines.length * drawFontSize * 1.2;
     const width = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
@@ -622,7 +641,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                    ))}
                    <div className="h-px w-full bg-white/10 my-1"></div>
                    
-                   {/* Tool-specific styling controls */}
                    {drawingTool === 'text' && (
                      <div className="flex flex-col gap-3 animate-in fade-in zoom-in-95">
                         <div className="flex flex-col gap-1">
@@ -676,17 +694,21 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
              <button onClick={() => setSidebarTab('files')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Files</button>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4">
-             {sidebarTab === 'chat' ? chatMessages.map((msg, i) => (
-               <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-1`}>
-                  <div className="flex items-center gap-2 mb-1 px-1">
-                    <span className="text-[9px] font-black uppercase text-slate-600">{msg.name}</span>
-                    <span className="text-[8px] font-medium text-slate-700">{msg.timestamp}</span>
-                  </div>
-                  <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none' : 'bg-white/5 text-slate-300 rounded-tl-none border border-white/5'}`}>
-                    {msg.text}
-                  </div>
-               </div>
-             )) : (
+             {sidebarTab === 'chat' ? (
+               chatMessages.length > 0 ? chatMessages.map((msg, i) => (
+                 <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-1`}>
+                    <div className="flex items-center gap-2 mb-1 px-1">
+                      <span className="text-[9px] font-black uppercase text-slate-600">{msg.name}</span>
+                      <span className="text-[8px] font-medium text-slate-700">{msg.timestamp}</span>
+                    </div>
+                    <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none' : 'bg-white/5 text-slate-300 rounded-tl-none border border-white/5'}`}>
+                      {msg.text}
+                    </div>
+                 </div>
+               )) : (
+                 <div className="h-full flex items-center justify-center text-slate-600 text-[10px] font-black uppercase tracking-widest">No messages yet</div>
+               )
+             ) : (
                <div className="space-y-4">
                   <button onClick={() => fileInputRef.current?.click()} className="w-full py-6 border-2 border-dashed border-[#333] rounded-2xl text-slate-500 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all">
                     {isUploading ? 'Uploading...' : 'Upload Expert File'}
