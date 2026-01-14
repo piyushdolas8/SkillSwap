@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect } from 'react';
+
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { AppView, UserProfile, PortfolioEntry } from './types';
 import { supabase } from './services/supabaseClient';
 import LandingPage from './components/LandingPage';
@@ -19,6 +20,7 @@ const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [showLoadingFallback, setShowLoadingFallback] = useState(false);
   const [isProfileFetching, setIsProfileFetching] = useState(false);
   const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
   const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
@@ -37,7 +39,9 @@ const App: React.FC = () => {
     const lastActive = lastActiveAt ? new Date(lastActiveAt) : null;
     
     if (!lastActive) {
-      await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+      try {
+        await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+      } catch (e) {}
       return 1;
     }
 
@@ -48,12 +52,18 @@ const App: React.FC = () => {
 
     if (diffInHours >= 24 && diffInHours < 48) {
       newStreak += 1;
-      await supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId);
+      try {
+        await supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId);
+      } catch (e) {}
     } else if (diffInHours >= 48) {
       newStreak = 1;
-      await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+      try {
+        await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
+      } catch (e) {}
     } else {
-      await supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId);
+      try {
+        await supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId);
+      } catch (e) {}
     }
     
     return newStreak;
@@ -118,19 +128,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleStartAction = useCallback(() => {
-    if (!session && !isDemoMode) {
-      navigate(AppView.AUTH);
-      return;
-    }
-    const isProfileIncomplete = userProfile.teaching.length === 0 || userProfile.learning.length === 0;
-    if (isProfileIncomplete) {
-      navigate(AppView.PROFILE_SETUP);
-    } else {
-      navigate(AppView.MATCHING);
-    }
-  }, [session, isDemoMode, userProfile, navigate]);
-
   const handleDemoMode = useCallback(() => {
     setIsDemoMode(true);
     setIsInitialLoading(false);
@@ -156,21 +153,49 @@ const App: React.FC = () => {
     navigate(AppView.LANDING);
   }, [navigate]);
 
+  const handleStartAction = useCallback(() => {
+    if (!session && !isDemoMode) {
+      navigate(AppView.AUTH);
+      return;
+    }
+    const isProfileIncomplete = userProfile.teaching.length === 0 || userProfile.learning.length === 0;
+    if (isProfileIncomplete) {
+      navigate(AppView.PROFILE_SETUP);
+    } else {
+      navigate(AppView.MATCHING);
+    }
+  }, [session, isDemoMode, userProfile, navigate]);
+
   useEffect(() => {
     let mounted = true;
+    const fallbackTimer = setTimeout(() => {
+      if (mounted && isInitialLoading) setShowLoadingFallback(true);
+    }, 4000);
+
     const initApp = async () => {
       try {
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (mounted) {
           setSession(existingSession);
-          if (existingSession) await fetchProfile(existingSession.user.id);
+          if (existingSession) {
+            // Start profile fetch but don't let it block forever
+            const profilePromise = fetchProfile(existingSession.user.id);
+            const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
+            await Promise.race([profilePromise, timeoutPromise]);
+          }
           setIsInitialLoading(false);
+          clearTimeout(fallbackTimer);
         }
       } catch (err) {
-        if (mounted) setIsInitialLoading(false);
+        console.error("Initialization error:", err);
+        if (mounted) {
+          setIsInitialLoading(false);
+          clearTimeout(fallbackTimer);
+        }
       }
     };
     initApp();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
@@ -183,9 +208,11 @@ const App: React.FC = () => {
         navigate(AppView.LANDING);
       }
     });
+
     return () => {
       mounted = false;
       subscription.unsubscribe();
+      clearTimeout(fallbackTimer);
     };
   }, [currentView, navigate]);
 
@@ -211,9 +238,35 @@ const App: React.FC = () => {
 
   if (isInitialLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#080910]">
-        <div className="loader-ring mb-4"></div>
-        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest animate-pulse">Establishing Peer Connection...</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#080910] p-6 text-center">
+        <div className="relative mb-8">
+          <div className="loader-ring"></div>
+          <div className="absolute inset-0 flex items-center justify-center">
+             <span className="material-symbols-outlined text-primary/40 animate-pulse">hub</span>
+          </div>
+        </div>
+        <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] animate-pulse mb-2">Establishing Peer Connection...</p>
+        
+        {showLoadingFallback && (
+          <div className="mt-8 p-8 bg-white/5 border border-white/5 rounded-[2rem] max-w-sm animate-in fade-in slide-in-from-bottom-4">
+            <p className="text-slate-500 text-xs font-medium mb-6">
+              The network is taking longer than expected to respond. This usually happens if the Supabase project is hibernating.
+            </p>
+            <button 
+              onClick={handleDemoMode}
+              className="w-full py-4 bg-primary text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-glow hover:brightness-110 transition-all flex items-center justify-center gap-2"
+            >
+              <span className="material-symbols-outlined !text-sm">rocket_launch</span>
+              Launch Demo Mode
+            </button>
+            <button 
+              onClick={() => window.location.reload()}
+              className="mt-4 text-slate-600 text-[9px] font-black uppercase tracking-widest hover:text-white transition-colors"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
       </div>
     );
   }
