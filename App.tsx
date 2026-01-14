@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { AppView, UserProfile } from './types';
+import { AppView, UserProfile, PortfolioEntry } from './types';
 import { supabase } from './services/supabaseClient';
 import LandingPage from './components/LandingPage';
 import AuthPage from './components/AuthPage';
@@ -13,8 +13,6 @@ import CommunityPage from './components/CommunityPage';
 import LeaderboardPage from './components/LeaderboardPage';
 import InquiryPage from './components/InquiryPage';
 
-const DEMO_STORAGE_KEY = 'skillswap_demo_profile';
-
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.LANDING);
   const [session, setSession] = useState<any>(null);
@@ -24,37 +22,54 @@ const App: React.FC = () => {
   const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
   const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
   
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem(DEMO_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    
-    return {
-      name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: ''
-    };
+  const [userProfile, setUserProfile] = useState<UserProfile>({
+    name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: ''
   });
 
   const navigate = useCallback((view: AppView) => {
-    console.log(`Navigating to: ${view}`);
+    console.log(`[Navigation] Moving to ${view}`);
     setCurrentView(view);
     window.scrollTo(0, 0);
   }, []);
 
-  const fetchProfile = async (userId: string, forceNavigate = false) => {
+  const fetchProfile = async (userId: string) => {
     if (isProfileFetching) return;
     setIsProfileFetching(true);
     try {
-      const { data: profileData, error: profileError } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      // 1. Fetch Profile Base
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
       
       if (profileError || !profileData) {
-        if (forceNavigate || currentView === AppView.LANDING) {
-          navigate(AppView.PROFILE_SETUP);
-        }
+        console.warn("No profile found for user, likely needs setup.");
+        // If we're on landing and logged in without a profile, we should stay here but show setup if they click start
         return;
       }
 
-      const { data: skillsData } = await supabase.from('skills').select('skill_name, type').eq('user_id', userId);
+      // 2. Fetch Skills
+      const { data: skillsData } = await supabase
+        .from('skills')
+        .select('skill_name, type')
+        .eq('user_id', userId);
+
+      // 3. Fetch Portfolio
+      const { data: portfolioData } = await supabase
+        .from('portfolio')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      const mappedPortfolio: PortfolioEntry[] = (portfolioData || []).map(item => ({
+        id: item.id,
+        skill: item.skill,
+        partnerName: item.partner_name,
+        type: item.type as 'taught' | 'learned',
+        date: new Date(item.created_at).toLocaleDateString(),
+        summary: item.summary
+      }));
 
       const fetchedProfile: UserProfile = {
         name: profileData.name || '',
@@ -68,15 +83,10 @@ const App: React.FC = () => {
         avatarUrl: profileData.avatar_url || '',
         teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
         learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
-        portfolio: []
+        portfolio: mappedPortfolio
       };
 
-      // Only update if we aren't currently in the setup view to avoid wiping user edits
-      setUserProfile(prev => {
-        if (currentView === AppView.PROFILE_SETUP) return prev;
-        return fetchedProfile;
-      });
-
+      setUserProfile(fetchedProfile);
     } catch (e) { 
       console.warn("Profile fetch error:", e);
     } finally {
@@ -85,11 +95,22 @@ const App: React.FC = () => {
   };
 
   const handleStartAction = useCallback(() => {
+    console.log("[Action] Start SkillSwap Clicked");
+    
     if (!session && !isDemoMode) {
+      console.log("[Action] Redirecting to Auth (No Session)");
       navigate(AppView.AUTH);
-    } else if (userProfile.teaching.length === 0 || userProfile.learning.length === 0) {
+      return;
+    }
+
+    // Check if profile is complete (needs at least one teach and one learn skill)
+    const isProfileIncomplete = userProfile.teaching.length === 0 || userProfile.learning.length === 0;
+    
+    if (isProfileIncomplete) {
+      console.log("[Action] Redirecting to Profile Setup (Incomplete Profile)");
       navigate(AppView.PROFILE_SETUP);
     } else {
+      console.log("[Action] Redirecting to Matching Engine");
       navigate(AppView.MATCHING);
     }
   }, [session, isDemoMode, userProfile, navigate]);
@@ -123,10 +144,10 @@ const App: React.FC = () => {
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (mounted) {
           setSession(existingSession);
-          setIsInitialLoading(false);
           if (existingSession) {
             await fetchProfile(existingSession.user.id);
           }
+          setIsInitialLoading(false);
         }
       } catch (err) {
         if (mounted) setIsInitialLoading(false);
@@ -135,14 +156,17 @@ const App: React.FC = () => {
 
     initApp();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
+      
+      console.log(`[Auth Event] ${event}`);
       setSession(newSession);
       
       if (newSession) {
-        // Only fetch and navigate if we aren't already logged in
-        if (event === 'SIGNED_IN') {
-           fetchProfile(newSession.user.id, true);
+        await fetchProfile(newSession.user.id);
+        // Automatic redirection from Auth screen on successful login
+        if (currentView === AppView.AUTH) {
+          navigate(AppView.LANDING);
         }
       } else if (event === 'SIGNED_OUT') {
         setIsDemoMode(false);
@@ -155,7 +179,7 @@ const App: React.FC = () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [navigate]);
+  }, [currentView, navigate]);
 
   const handleMatchFound = (partner: UserProfile, matchId: string) => {
     setPartnerProfile(partner);
@@ -181,7 +205,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#080910]">
         <div className="loader-ring mb-4"></div>
-        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest animate-pulse">Initializing SkillSwap...</p>
+        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest animate-pulse">Establishing Peer Connection...</p>
       </div>
     );
   }

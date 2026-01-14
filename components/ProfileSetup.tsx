@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef } from 'react';
+
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { supabase } from '../services/supabaseClient';
 
@@ -29,8 +30,15 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
   const [isUploading, setIsUploading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Local draft state to prevent "vanishing" UI during async jumps
+  // Draft URL to prevent vanishing during async jumps
   const [avatarDraftUrl, setAvatarDraftUrl] = useState<string>(userProfile.avatarUrl || '');
+
+  // Sync draft URL if userProfile changes (e.g. after a fetch)
+  useEffect(() => {
+    if (userProfile.avatarUrl) {
+      setAvatarDraftUrl(userProfile.avatarUrl);
+    }
+  }, [userProfile.avatarUrl]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -50,46 +58,45 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Immediate preview for better UX
+    // Local preview
     const localPreview = URL.createObjectURL(file);
     setAvatarDraftUrl(localPreview);
     setIsUploading(true);
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No session found");
+      if (!session) throw new Error("No active session found");
 
       const userId = session.user.id;
       const fileExt = file.name.split('.').pop();
       const fileName = `avatar-${Date.now()}.${fileExt}`;
       const filePath = `public/${userId}/${fileName}`;
 
-      // 1. Upload to Supabase Storage
+      // 1. Storage Upload
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file, { 
-          upsert: true,
-          contentType: file.type 
-        });
+        .upload(filePath, file, { upsert: true, contentType: file.type });
 
       if (uploadError) throw uploadError;
 
-      // 2. Get Public URL
+      // 2. Public Link
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')
         .getPublicUrl(filePath);
 
-      // 3. Persist immediately to database so re-fetches don't wipe it
-      await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', userId);
+      // 3. Database Update (Immediate sync so App.tsx fetch doesn't overwrite it)
+      await supabase.from('profiles').upsert({ 
+        id: userId, 
+        avatar_url: publicUrl,
+        email: session.user.email 
+      });
 
-      // 4. Sync states
       setAvatarDraftUrl(publicUrl);
       setUserProfile(prev => ({ ...prev, avatarUrl: publicUrl }));
       
     } catch (err: any) {
-      console.error("Upload failed:", err);
-      alert("Error uploading image: " + err.message);
-      setAvatarDraftUrl(userProfile.avatarUrl || ''); // Revert on error
+      console.error("Avatar upload failed:", err);
+      alert("Photo sync failed. Please try again.");
     } finally {
       setIsUploading(false);
     }
@@ -133,11 +140,10 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
     setIsSaving(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No active session");
+      if (!session) throw new Error("Authentication timeout. Please log in again.");
 
       const userId = session.user.id;
       
-      // Update the main profile record
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert({
@@ -146,13 +152,13 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           full_name: userProfile.fullName,
           email: session.user.email,
           tokens: userProfile.tokens || 5,
-          avatar_url: avatarDraftUrl, // Use the most recent URL (draft or public)
+          avatar_url: avatarDraftUrl,
           bio: userProfile.bio
         });
 
       if (profileError) throw profileError;
 
-      // Update skills in separate table
+      // Update Skills
       await supabase.from('skills').delete().eq('user_id', userId);
       const skillsToInsert = [
         ...userProfile.teaching.map(s => ({ user_id: userId, skill_name: s, type: 'teaching' })),
@@ -162,12 +168,10 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         await supabase.from('skills').insert(skillsToInsert);
       }
 
-      // Important: Sync the final state back to App.tsx before completing
-      setUserProfile(prev => ({ ...prev, avatarUrl: avatarDraftUrl }));
       onComplete();
     } catch (err: any) {
-      console.error("Save error:", err);
-      alert("Failed to save: " + err.message);
+      console.error("Profile save error:", err);
+      alert(err.message || "Failed to finalize profile.");
     } finally {
       setIsSaving(false);
     }
@@ -187,7 +191,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
       <main className="max-w-[1000px] mx-auto px-6 py-12">
         <div className="mb-12 text-center">
           <h1 className="text-white text-5xl font-black mb-4 uppercase tracking-tighter">Your Expert Identity</h1>
-          <p className="text-slate-400 text-lg max-w-xl mx-auto font-medium">Build your profile and start trading expertise.</p>
+          <p className="text-slate-400 text-lg max-w-xl mx-auto font-medium">Configure your presence on the decentralized network.</p>
         </div>
 
         <div className="bg-card-dark border border-border-dark rounded-[2.5rem] p-10 mb-8 shadow-2xl relative overflow-hidden">
@@ -200,14 +204,14 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 {isUploading ? (
                   <div className="flex flex-col items-center">
                     <div className="size-8 border-2 border-primary border-t-transparent animate-spin rounded-full mb-2"></div>
-                    <p className="text-[10px] font-black text-primary uppercase">Syncing...</p>
+                    <p className="text-[10px] font-black text-primary uppercase">Syncing</p>
                   </div>
                 ) : avatarDraftUrl ? (
                   <img src={avatarDraftUrl} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
                   <div className="text-center">
                     <span className="material-symbols-outlined text-slate-500 !text-4xl mb-2">add_a_photo</span>
-                    <p className="text-[10px] font-black text-slate-500 uppercase">Upload Photo</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase">Upload Expert ID</p>
                   </div>
                 )}
                 <div className="absolute inset-0 bg-primary/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
@@ -243,7 +247,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 <textarea 
                   value={userProfile.bio}
                   onChange={(e) => setUserProfile(prev => ({ ...prev, bio: e.target.value }))}
-                  placeholder="Tell us what you're passionate about..."
+                  placeholder="Summarize your expert value..."
                   className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none h-20 resize-none focus:border-primary transition-colors"
                 />
               </div>
@@ -255,7 +259,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           <div className="bg-card-dark border border-border-dark rounded-2xl p-8 shadow-xl">
             <h2 className="text-white text-xl font-bold mb-6 flex items-center gap-2">
               <span className="material-symbols-outlined text-primary">school</span>
-              Skills I can teach
+              I can teach
             </h2>
             <div className="relative mb-6">
               <input 
@@ -290,8 +294,8 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
 
           <div className="bg-card-dark border border-border-dark rounded-2xl p-8 shadow-xl">
             <h2 className="text-white text-xl font-bold mb-6 flex items-center gap-2">
-              <span className="material-symbols-outlined text-emerald-500">auto_stories</span>
-              Skills I want to learn
+              <span className="material-symbols-outlined text-emerald-500">auto_awesome</span>
+              I want to learn
             </h2>
             <div className="relative mb-6">
               <input 
@@ -301,13 +305,13 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                 onBlur={() => setTimeout(() => setShowLearningSuggestions(false), 200)}
                 onChange={(e) => setLearningInput(e.target.value)}
                 onKeyDown={(e) => handleKeyDown(e, 'learning')}
-                placeholder="Search goals..."
+                placeholder="Search masteries..."
                 className="w-full bg-background-dark border border-border-dark rounded-xl text-white px-5 py-3 outline-none focus:border-primary"
               />
               {showLearningSuggestions && learningSuggestions.length > 0 && (
                 <div className="absolute top-full left-0 w-full mt-2 bg-[#1b1d27] border border-border-dark rounded-xl z-20 max-h-60 overflow-y-auto shadow-2xl">
                   {learningSuggestions.map((s, idx) => (
-                    <button key={s.name} onClick={() => addSkill(s.name, 'learning')} className={`w-full text-left px-5 py-3 text-sm border-b border-white/5 ${selectedIndex === idx ? 'bg-emerald-600 text-white' : 'text-slate-300'}`}>
+                    <button key={s.name} onClick={() => addSkill(s.name, 'learning')} className={`w-full text-left px-5 py-3 text-sm border-b border-white/5 ${selectedIndex === idx ? 'bg-primary text-white' : 'text-slate-300'}`}>
                       {s.name}
                     </button>
                   ))}
@@ -316,7 +320,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
             </div>
             <div className="flex flex-wrap gap-2 min-h-[40px]">
               {userProfile.learning.map(skill => (
-                <div key={skill} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-1.5 rounded-lg animate-in fade-in zoom-in-95">
+                <div key={skill} className="flex items-center gap-2 bg-emerald-500 text-white px-3 py-1.5 rounded-lg animate-in fade-in zoom-in-95">
                   <span className="text-sm font-bold">{skill}</span>
                   <button onClick={() => removeSkill(skill, 'learning')} className="material-symbols-outlined text-sm">close</button>
                 </div>
@@ -328,10 +332,20 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         <div className="mt-12 flex justify-center">
           <button 
             onClick={handleSaveAndComplete}
-            disabled={userProfile.teaching.length === 0 || userProfile.learning.length === 0 || !userProfile.name || isSaving || isUploading}
-            className="bg-primary text-white font-black px-12 py-4 rounded-2xl shadow-glow-primary uppercase tracking-widest disabled:opacity-30 transition-all hover:scale-105 active:scale-95"
+            disabled={isSaving || userProfile.teaching.length === 0 || userProfile.learning.length === 0}
+            className="bg-primary text-white font-black px-12 py-5 rounded-2xl shadow-glow hover:scale-105 transition-all uppercase tracking-widest text-sm disabled:opacity-50 disabled:hover:scale-100 flex items-center gap-3"
           >
-            {isSaving ? 'Finalizing Profile...' : 'Confirm My Identity'}
+            {isSaving ? (
+              <>
+                <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                Finalizing...
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined">rocket_launch</span>
+                Initialize Expert Profile
+              </>
+            )}
           </button>
         </div>
       </main>
