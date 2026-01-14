@@ -56,3 +56,12 @@ export interface ChatMessage {
   text: string;
   timestamp: string;
 }
+
+export interface SharedFile {
+  id: string;
+  name: string;
+  url: string;
+  size: number;
+  uploader_name: string;
+  created_at: string;
+}
