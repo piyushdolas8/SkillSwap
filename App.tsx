@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { AppView, UserProfile, PortfolioEntry } from './types';
 import { supabase } from './services/supabaseClient';
@@ -12,6 +13,7 @@ import MarketplacePage from './components/MarketplacePage';
 import CommunityPage from './components/CommunityPage';
 import LeaderboardPage from './components/LeaderboardPage';
 import InquiryPage from './components/InquiryPage';
+import HistoryPage from './components/HistoryPage';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.LANDING);
@@ -35,7 +37,6 @@ const App: React.FC = () => {
     const now = new Date();
     const lastActive = lastActiveAt ? new Date(lastActiveAt) : null;
     
-    // If it's the first time ever
     if (!lastActive) {
       await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
       return 1;
@@ -47,15 +48,12 @@ const App: React.FC = () => {
     let newStreak = currentStreak;
 
     if (diffInHours >= 24 && diffInHours < 48) {
-      // It's the next day!
       newStreak += 1;
       await supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId);
     } else if (diffInHours >= 48) {
-      // Broke the streak :(
       newStreak = 1;
       await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
     } else {
-      // Still the same day, just update timestamp
       await supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId);
     }
     
@@ -143,7 +141,10 @@ const App: React.FC = () => {
       learning: ['Python'],
       bio: 'Guest expert testing the system.',
       tokens: 10,
-      portfolio: [],
+      portfolio: [
+        { id: '1', skill: 'React', partnerName: 'Saroj', type: 'taught', date: '2/10/2026', summary: 'Architected a state-of-the-art dashboard.' },
+        { id: '2', skill: 'Python', partnerName: 'Saroj', type: 'learned', date: '2/11/2026', summary: 'Explored neural networks and AI integration.' },
+      ],
       level: 1, xp: 120, streak: 3,
       avatarUrl: ''
     };
@@ -238,6 +239,8 @@ const App: React.FC = () => {
         return <LeaderboardPage onNavigate={navigate} />;
       case AppView.INQUIRY:
         return <InquiryPage onBack={() => navigate(AppView.LANDING)} />;
+      case AppView.HISTORY:
+        return <HistoryPage userProfile={userProfile} onNavigate={navigate} />;
       default:
         return <LandingPage onNavigate={navigate} userProfile={session ? userProfile : undefined} onStart={handleStartAction} onPurchase={handlePurchaseTokens} />;
     }

@@ -10,7 +10,8 @@ export enum AppView {
   MARKETPLACE = 'MARKETPLACE',
   COMMUNITY = 'COMMUNITY',
   LEADERBOARD = 'LEADERBOARD',
-  INQUIRY = 'INQUIRY'
+  INQUIRY = 'INQUIRY',
+  HISTORY = 'HISTORY'
 }
 
 export interface PortfolioEntry {

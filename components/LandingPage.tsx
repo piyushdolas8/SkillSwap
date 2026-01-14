@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { UserProfile, AppView } from '../types';
 import { supabase } from '../services/supabaseClient';
@@ -23,7 +24,6 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
   const [coachAdvice, setCoachAdvice] = useState<string>("Analyzing your skill potential...");
   const [loadingAdvice, setLoadingAdvice] = useState(false);
   
-  // Payment Simulation State
   const [isProcessing, setIsProcessing] = useState(false);
   const [purchaseSuccess, setPurchaseSuccess] = useState(false);
 
@@ -57,6 +57,9 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
       }, 2500);
     }
   };
+
+  // Only show the 3 latest swaps on the front page
+  const latestPortfolio = userProfile?.portfolio?.slice(0, 3) || [];
 
   return (
     <>
@@ -97,6 +100,9 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
                     <div className="absolute top-full right-0 mt-3 w-56 bg-[#161a2d] border border-white/5 rounded-2xl shadow-2xl py-2 z-[60] animate-in fade-in slide-in-from-top-2">
                       <button onClick={() => { onNavigate(AppView.PROFILE_SETUP); setShowProfileMenu(false); }} className="w-full text-left px-4 py-2.5 text-xs font-bold text-slate-300 hover:bg-white/5 flex items-center gap-2">
                         <span className="material-symbols-outlined text-sm">settings</span> Edit Profile
+                      </button>
+                      <button onClick={() => { onNavigate(AppView.HISTORY); setShowProfileMenu(false); }} className="w-full text-left px-4 py-2.5 text-xs font-bold text-slate-300 hover:bg-white/5 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-sm">history</span> Swap History
                       </button>
                       <button onClick={handleLogout} className="w-full text-left px-4 py-2.5 text-xs font-bold text-red-500 hover:bg-red-500/10 flex items-center gap-2 border-t border-white/5 mt-1">
                         <span className="material-symbols-outlined text-sm">logout</span> Sign Out
@@ -217,12 +223,19 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
 
              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-12">
-                   <h2 className="text-white text-2xl font-black flex items-center gap-3 uppercase tracking-tight">
-                      <span className="material-symbols-outlined text-primary !text-3xl">verified_user</span>
-                      Verified Skill Portfolio
-                   </h2>
+                   <div className="flex items-center justify-between">
+                      <h2 className="text-white text-2xl font-black flex items-center gap-3 uppercase tracking-tight">
+                        <span className="material-symbols-outlined text-primary !text-3xl">verified_user</span>
+                        Recent Swaps
+                      </h2>
+                      {userProfile.portfolio.length > 3 && (
+                        <button onClick={() => onNavigate(AppView.HISTORY)} className="text-primary text-[10px] font-black uppercase tracking-widest hover:underline flex items-center gap-1">
+                          View All History <span className="material-symbols-outlined !text-xs">chevron_right</span>
+                        </button>
+                      )}
+                   </div>
                    <div className="grid grid-cols-1 gap-4">
-                      {userProfile.portfolio.length > 0 ? userProfile.portfolio.map(entry => (
+                      {latestPortfolio.length > 0 ? latestPortfolio.map(entry => (
                         <div key={entry.id} className="bg-card-dark border border-border-dark p-6 rounded-[2rem] flex gap-6 hover:border-primary/50 transition-all group">
                            <div className="size-20 bg-primary/10 rounded-2xl flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-white transition-all shrink-0">
                               <span className="material-symbols-outlined !text-4xl">verified</span>
