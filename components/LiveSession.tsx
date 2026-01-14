@@ -28,6 +28,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [partnerMediaStatus, setPartnerMediaStatus] = useState({ isMuted: false, isVideoOff: false });
+  const [errorNotification, setErrorNotification] = useState<string | null>(null);
   
   // Whiteboard state
   const [drawColor, setDrawColor] = useState('#0d33f2');
@@ -51,6 +53,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     getSession();
   }, []);
 
+  // Show error for 4 seconds
+  useEffect(() => {
+    if (errorNotification) {
+      const timer = setTimeout(() => setErrorNotification(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [errorNotification]);
+
   // Real-time Sync Logic
   useEffect(() => {
     if (!matchId || !currentUserId) return;
@@ -59,7 +69,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       config: { broadcast: { self: false } }
     });
 
-    // Handle Code/Draw/Chat Broadcasts
     channel
       .on('broadcast', { event: 'code-update' }, (payload) => {
         setCode(payload.payload.code);
@@ -75,11 +84,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         }
       })
       .on('broadcast', { event: 'media-update' }, (payload) => {
-        // In a real app, this would trigger WebRTC renegotiation or state UI
-        console.log("Partner media status:", payload.payload);
+        setPartnerMediaStatus(payload.payload);
       });
 
-    // Listen for Persistent Chat Messages
     const dbSubscription = supabase
       .channel(`db-messages:${matchId}`)
       .on('postgres_changes', { 
@@ -121,14 +128,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       streamRef.current.getAudioTracks().forEach(track => track.enabled = !isMuted);
       streamRef.current.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
       
-      // Notify partner
       channelRef.current?.send({
         type: 'broadcast',
         event: 'media-update',
         payload: { isMuted, isVideoOff }
       });
     }
-  }, [isMuted, isVideoOff]);
+  }, [isMuted, isVideoOff, isRealtimeReady]);
 
   // Canvas Drawing Handlers
   const handleRemoteDraw = (data: any) => {
@@ -154,8 +160,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
     const rect = canvas.getBoundingClientRect();
     const x = ('touches' in e ? e.touches[0].clientX : e.clientX) - rect.left;
     const y = ('touches' in e ? e.touches[0].clientY : e.clientY) - rect.top;
-    
-    // Store last point
     (canvas as any).lastPoint = { x, y };
   };
 
@@ -181,7 +185,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
       ctx.stroke();
       ctx.closePath();
 
-      // Broadcast event
       channelRef.current?.send({
         type: 'broadcast',
         event: 'draw-event',
@@ -232,6 +235,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         screenStreamRef.current?.getTracks().forEach(track => track.stop());
         setIsScreenSharing(false);
       } else {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+          setErrorNotification("Screen sharing is not supported in this browser.");
+          return;
+        }
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = stream;
         if (screenVideoRef.current) screenVideoRef.current.srcObject = stream;
@@ -242,8 +249,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         
         setIsScreenSharing(true);
       }
-    } catch (err) {
-      console.error("Screen share failed:", err);
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setErrorNotification("Permission denied. Please allow screen access to share.");
+      } else {
+        setErrorNotification("Failed to start screen share. Please try again.");
+      }
+      console.warn("Screen share failed:", err);
+      setIsScreenSharing(false);
     }
   };
 
@@ -265,7 +278,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
         streamRef.current = stream;
         if (videoRef.current) videoRef.current.srcObject = stream;
-      } catch (e) { console.warn("Media failed", e); }
+      } catch (e: any) { 
+        setErrorNotification("Camera/Mic access denied. Some features will be limited.");
+        console.warn("Media failed", e); 
+      }
     };
     initMedia();
     return () => { 
@@ -276,6 +292,19 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
 
   return (
     <div className="flex flex-col h-screen w-full bg-background-dark overflow-hidden font-display relative">
+      {/* Error Notification Toast */}
+      {errorNotification && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-top-4 duration-300">
+          <div className="bg-red-600 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-red-400/50">
+            <span className="material-symbols-outlined">warning</span>
+            <span className="text-sm font-bold uppercase tracking-tight">{errorNotification}</span>
+            <button onClick={() => setErrorNotification(null)} className="ml-2 hover:opacity-70">
+              <span className="material-symbols-outlined !text-sm">close</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <header className="flex items-center justify-between border-b border-border-dark px-6 py-3 bg-background-dark/80 backdrop-blur-md z-10">
         <div className="flex items-center gap-4">
           <div className="size-8 text-primary">
@@ -347,7 +376,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
                   onTouchEnd={stopDrawing}
                   className="w-full h-full cursor-crosshair"
                 />
-                {/* Drawing Tools */}
                 <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#1a1d2d] p-3 rounded-2xl border border-white/10 shadow-2xl">
                    <button onClick={() => setDrawColor('#0d33f2')} className={`size-8 rounded-full border-2 transition-transform hover:scale-110 ${drawColor === '#0d33f2' ? 'border-white scale-110' : 'border-transparent'}`} style={{ backgroundColor: '#0d33f2' }}></button>
                    <button onClick={() => setDrawColor('#10b981')} className={`size-8 rounded-full border-2 transition-transform hover:scale-110 ${drawColor === '#10b981' ? 'border-white scale-110' : 'border-transparent'}`} style={{ backgroundColor: '#10b981' }}></button>
@@ -372,31 +400,46 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
                 </div>
               )}
               
-              {/* Partner Video */}
-              <div className="w-48 aspect-video bg-[#1a1d2d] rounded-2xl border-2 border-primary overflow-hidden relative shadow-glow pointer-events-auto flex items-center justify-center">
-                <video ref={partnerVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                {/* Fallback for no video stream */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center bg-background-dark/80 p-4">
-                   <div className="size-12 rounded-full bg-primary/20 flex items-center justify-center text-primary mb-2">
-                     <span className="material-symbols-outlined !text-2xl animate-pulse">person</span>
-                   </div>
-                   <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest">{partner?.name || 'Partner'}</p>
+              {/* Partner Video Slot */}
+              <div className="w-48 aspect-video bg-[#0a0c16] rounded-2xl border-2 border-primary overflow-hidden relative shadow-glow pointer-events-auto flex items-center justify-center group">
+                {partnerMediaStatus.isVideoOff ? (
+                  <div className="absolute inset-0 bg-[#0a0c16] flex flex-col items-center justify-center animate-in fade-in duration-300">
+                    <div className="size-14 rounded-full bg-red-600/10 flex items-center justify-center text-red-500 mb-2 border border-red-500/20">
+                      <span className="material-symbols-outlined !text-2xl">videocam_off</span>
+                    </div>
+                    <p className="text-[7px] font-black uppercase text-red-500 tracking-widest">Partner Offline</p>
+                  </div>
+                ) : (
+                  <video ref={partnerVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+                )}
+                
+                {/* Always show name badge */}
+                <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-0.5 rounded text-[8px] font-bold text-white uppercase tracking-widest">
+                  {partner?.name || 'Partner'}
                 </div>
+                
+                {partnerMediaStatus.isMuted && (
+                  <div className="absolute top-2 right-2 size-5 bg-red-600 rounded-full flex items-center justify-center border border-white/20">
+                    <span className="material-symbols-outlined text-white !text-[12px]">mic_off</span>
+                  </div>
+                )}
               </div>
 
-              {/* Your Video */}
+              {/* Your Local Video Slot */}
               <div className="w-40 aspect-video bg-black rounded-2xl border-2 border-emerald-500 overflow-hidden relative shadow-glow pointer-events-auto group">
                 {isVideoOff ? (
                   <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center animate-in fade-in zoom-in duration-300">
-                     <span className="material-symbols-outlined text-red-500 !text-3xl mb-1">videocam_off</span>
-                     <p className="text-[7px] font-black uppercase text-slate-500 tracking-widest">Camera Off</p>
+                     <div className="size-10 rounded-full bg-red-600/10 flex items-center justify-center text-red-500 mb-1 border border-red-500/20">
+                        <span className="material-symbols-outlined !text-xl">videocam_off</span>
+                     </div>
+                     <p className="text-[6px] font-black uppercase text-slate-500 tracking-widest">My Camera Off</p>
                   </div>
                 ) : (
                   <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
                 )}
                 <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-0.5 rounded text-[8px] font-bold text-white uppercase tracking-widest">You</div>
                 {isMuted && (
-                  <div className="absolute top-2 right-2 size-5 bg-red-600 rounded-full flex items-center justify-center">
+                  <div className="absolute top-2 right-2 size-5 bg-red-600 rounded-full flex items-center justify-center border border-white/20">
                     <span className="material-symbols-outlined text-white !text-[12px]">mic_off</span>
                   </div>
                 )}
@@ -404,6 +447,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'Python', onEn
             </div>
           </div>
           
+          {/* Main Lab Controls */}
           <div className="flex justify-center pb-6">
             <div className="flex items-center gap-3 bg-[#1a1d2d]/95 backdrop-blur-xl border border-white/5 p-3 rounded-2xl shadow-2xl">
               <button 
