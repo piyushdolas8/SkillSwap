@@ -25,6 +25,8 @@ const App: React.FC = () => {
   const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
   const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
   
+  const initializationRef = useRef(false);
+
   const [userProfile, setUserProfile] = useState<UserProfile>({
     name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: ''
   });
@@ -39,9 +41,7 @@ const App: React.FC = () => {
     const lastActive = lastActiveAt ? new Date(lastActiveAt) : null;
     
     if (!lastActive) {
-      try {
-        await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
-      } catch (e) {}
+      supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId).then(() => {});
       return 1;
     }
 
@@ -52,18 +52,12 @@ const App: React.FC = () => {
 
     if (diffInHours >= 24 && diffInHours < 48) {
       newStreak += 1;
-      try {
-        await supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId);
-      } catch (e) {}
+      supabase.from('profiles').update({ streak: newStreak, last_active_at: now.toISOString() }).eq('id', userId).then(() => {});
     } else if (diffInHours >= 48) {
       newStreak = 1;
-      try {
-        await supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId);
-      } catch (e) {}
+      supabase.from('profiles').update({ streak: 1, last_active_at: now.toISOString() }).eq('id', userId).then(() => {});
     } else {
-      try {
-        await supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId);
-      } catch (e) {}
+      supabase.from('profiles').update({ last_active_at: now.toISOString() }).eq('id', userId).then(() => {});
     }
     
     return newStreak;
@@ -167,10 +161,13 @@ const App: React.FC = () => {
   }, [session, isDemoMode, userProfile, navigate]);
 
   useEffect(() => {
+    if (initializationRef.current) return;
+    initializationRef.current = true;
+
     let mounted = true;
     const fallbackTimer = setTimeout(() => {
-      if (mounted && isInitialLoading) setShowLoadingFallback(true);
-    }, 4000);
+      if (mounted) setShowLoadingFallback(true);
+    }, 5000);
 
     const initApp = async () => {
       try {
@@ -178,30 +175,30 @@ const App: React.FC = () => {
         if (mounted) {
           setSession(existingSession);
           if (existingSession) {
-            // Start profile fetch but don't let it block forever
-            const profilePromise = fetchProfile(existingSession.user.id);
-            const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
-            await Promise.race([profilePromise, timeoutPromise]);
+            await Promise.race([
+              fetchProfile(existingSession.user.id),
+              new Promise(resolve => setTimeout(resolve, 3000))
+            ]);
           }
-          setIsInitialLoading(false);
-          clearTimeout(fallbackTimer);
         }
       } catch (err) {
         console.error("Initialization error:", err);
+      } finally {
         if (mounted) {
           setIsInitialLoading(false);
           clearTimeout(fallbackTimer);
         }
       }
     };
+
     initApp();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
-      if (newSession) {
-        await fetchProfile(newSession.user.id);
-        if (currentView === AppView.AUTH) navigate(AppView.LANDING);
+      if (newSession && event === 'SIGNED_IN') {
+        fetchProfile(newSession.user.id);
+        navigate(AppView.LANDING);
       } else if (event === 'SIGNED_OUT') {
         setIsDemoMode(false);
         setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: '' });
@@ -214,7 +211,7 @@ const App: React.FC = () => {
       subscription.unsubscribe();
       clearTimeout(fallbackTimer);
     };
-  }, [currentView, navigate]);
+  }, []);
 
   const handleMatchFound = (partner: UserProfile, matchId: string) => {
     setPartnerProfile(partner);
