@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { UserProfile, PortfolioEntry } from '../types';
 import { supabase } from '../services/supabaseClient';
@@ -6,10 +5,11 @@ import { supabase } from '../services/supabaseClient';
 interface Props {
   userProfile: UserProfile;
   setUserProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
+  partner: UserProfile | null;
   onFinish: () => void;
 }
 
-const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }) => {
+const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, partner, onFinish }) => {
   const [rating, setRating] = useState(0);
   const [minting, setMinting] = useState(true);
 
@@ -20,11 +20,11 @@ const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }
         if (!session) throw new Error("No session");
 
         const userId = session.user.id;
-        const skill = userProfile.learning[0] || 'Python';
-        const partnerName = 'Alex Rivera';
+        const skill = userProfile.learning[0] || 'Skill Mastery';
+        const partnerName = partner?.name || 'Expert Peer';
         const summary = `Mastered ${skill} core logic and collaborative coding with mentor ${partnerName}. Verified via Live Session.`;
 
-        // 1. Save to portfolio table
+        // 1. Save to portfolio table with dynamic partner name
         const { error: portfolioError } = await supabase
           .from('portfolio')
           .insert({
@@ -68,10 +68,10 @@ const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }
     };
 
     completeSession();
-  }, []);
+  }, [partner, userProfile.learning, setUserProfile, userProfile.tokens]);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center py-12 px-4">
+    <div className="flex-1 flex flex-col items-center justify-center py-12 px-4 min-h-screen bg-background-dark">
       <div className="max-w-[700px] w-full flex flex-col items-center">
         {minting ? (
           <div className="flex flex-col items-center py-20">
@@ -86,8 +86,8 @@ const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }
                 <span className="material-symbols-outlined text-sm">verified_user</span>
                 Proof of Skill Verified
               </div>
-              <h1 className="text-5xl font-black text-white tracking-tighter mb-2">SESSION COMPLETE</h1>
-              <p className="text-slate-400 text-lg font-medium">You've successfully leveled up with Alex Rivera</p>
+              <h1 className="text-5xl font-black text-white tracking-tighter mb-2 uppercase">SESSION COMPLETE</h1>
+              <p className="text-slate-400 text-lg font-medium">You've successfully leveled up with {partner?.name || 'your mentor'}</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full mb-10">
@@ -112,14 +112,14 @@ const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }
                     <span className="material-symbols-outlined !text-4xl">verified</span>
                   </div>
                   <div>
-                    <p className="text-white font-bold text-xl uppercase tracking-tighter">Mastery Lvl 1</p>
-                    <p className="text-slate-400 text-xs font-bold">Endorsed by Alex Rivera</p>
+                    <p className="text-white font-bold text-xl uppercase tracking-tighter">Mastery Lvl {userProfile.level}</p>
+                    <p className="text-slate-400 text-xs font-bold">Endorsed by {partner?.name.split(' ')[0] || 'Mentor'}</p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="w-full bg-[#111218] border border-white/5 rounded-3xl p-8 mb-10">
+            <div className="w-full bg-[#111218] border border-white/5 rounded-3xl p-8 mb-10 shadow-2xl">
               <h3 className="text-white text-xl font-bold mb-6 font-display uppercase tracking-tighter">Rate your mentor</h3>
               <div className="flex gap-4 mb-8 justify-center">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -135,7 +135,7 @@ const FeedbackPage: React.FC<Props> = ({ userProfile, setUserProfile, onFinish }
               </div>
               <textarea 
                 className="w-full h-32 p-6 bg-[#1b1d27] border border-white/5 rounded-2xl text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-all placeholder:text-slate-600 text-sm font-medium" 
-                placeholder="Write a peer recommendation for Alex..."
+                placeholder={`Write a peer recommendation for ${partner?.name || 'your mentor'}...`}
               ></textarea>
             </div>
 

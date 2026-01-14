@@ -36,26 +36,19 @@ const App: React.FC = () => {
     if (isProfileFetching) return;
     setIsProfileFetching(true);
     try {
-      // 1. Fetch Profile Base
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
       
-      if (profileError || !profileData) {
-        console.warn("No profile found for user, likely needs setup.");
-        // If we're on landing and logged in without a profile, we should stay here but show setup if they click start
-        return;
-      }
+      if (profileError || !profileData) return;
 
-      // 2. Fetch Skills
       const { data: skillsData } = await supabase
         .from('skills')
         .select('skill_name, type')
         .eq('user_id', userId);
 
-      // 3. Fetch Portfolio
       const { data: portfolioData } = await supabase
         .from('portfolio')
         .select('*')
@@ -95,22 +88,14 @@ const App: React.FC = () => {
   };
 
   const handleStartAction = useCallback(() => {
-    console.log("[Action] Start SkillSwap Clicked");
-    
     if (!session && !isDemoMode) {
-      console.log("[Action] Redirecting to Auth (No Session)");
       navigate(AppView.AUTH);
       return;
     }
-
-    // Check if profile is complete (needs at least one teach and one learn skill)
     const isProfileIncomplete = userProfile.teaching.length === 0 || userProfile.learning.length === 0;
-    
     if (isProfileIncomplete) {
-      console.log("[Action] Redirecting to Profile Setup (Incomplete Profile)");
       navigate(AppView.PROFILE_SETUP);
     } else {
-      console.log("[Action] Redirecting to Matching Engine");
       navigate(AppView.MATCHING);
     }
   }, [session, isDemoMode, userProfile, navigate]);
@@ -118,7 +103,6 @@ const App: React.FC = () => {
   const handleDemoMode = useCallback(() => {
     setIsDemoMode(true);
     setIsInitialLoading(false);
-    
     const mockUser: UserProfile = {
       name: 'Guest Expert',
       fullName: 'Demo Account',
@@ -138,43 +122,31 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
-
     const initApp = async () => {
       try {
         const { data: { session: existingSession } } = await supabase.auth.getSession();
         if (mounted) {
           setSession(existingSession);
-          if (existingSession) {
-            await fetchProfile(existingSession.user.id);
-          }
+          if (existingSession) await fetchProfile(existingSession.user.id);
           setIsInitialLoading(false);
         }
       } catch (err) {
         if (mounted) setIsInitialLoading(false);
       }
     };
-
     initApp();
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
-      
-      console.log(`[Auth Event] ${event}`);
       setSession(newSession);
-      
       if (newSession) {
         await fetchProfile(newSession.user.id);
-        // Automatic redirection from Auth screen on successful login
-        if (currentView === AppView.AUTH) {
-          navigate(AppView.LANDING);
-        }
+        if (currentView === AppView.AUTH) navigate(AppView.LANDING);
       } else if (event === 'SIGNED_OUT') {
         setIsDemoMode(false);
         setUserProfile({ name: '', fullName: '', email: '', teaching: [], learning: [], bio: '', tokens: 5, portfolio: [], level: 1, xp: 0, streak: 0, avatarUrl: '' });
         navigate(AppView.LANDING);
       }
     });
-
     return () => {
       mounted = false;
       subscription.unsubscribe();
@@ -225,7 +197,7 @@ const App: React.FC = () => {
       case AppView.LIVE_SESSION:
         return <LiveSession matchId={currentMatchId} partner={partnerProfile} skill={userProfile.learning[0] || 'Python'} onEnd={() => navigate(AppView.FEEDBACK)} />;
       case AppView.FEEDBACK:
-        return <FeedbackPage userProfile={userProfile} setUserProfile={setUserProfile} onFinish={() => navigate(AppView.LANDING)} />;
+        return <FeedbackPage userProfile={userProfile} setUserProfile={setUserProfile} partner={partnerProfile} onFinish={() => navigate(AppView.LANDING)} />;
       case AppView.MARKETPLACE:
         return <MarketplacePage onNavigate={navigate} onStartMatch={handleStartAction} />;
       case AppView.COMMUNITY:
