@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { UserProfile, AppView } from '../types';
 import { supabase } from '../services/supabaseClient';
@@ -58,7 +57,6 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
     }
   };
 
-  // Only show the 3 latest swaps on the front page
   const latestPortfolio = userProfile?.portfolio?.slice(0, 3) || [];
 
   return (
@@ -207,7 +205,21 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
                       {userProfile.streak || 1} Day Streak
                     </span>
                   </div>
-                  <h1 className="text-white text-5xl font-black tracking-tighter uppercase">HI, {userProfile.name?.split(' ')[0]}</h1>
+                  <div className="flex items-center gap-6">
+                    <h1 className="text-white text-5xl font-black tracking-tighter uppercase">HI, {userProfile.name?.split(' ')[0]}</h1>
+                    <div className="flex items-center gap-3">
+                      {userProfile.githubUrl && (
+                        <a href={userProfile.githubUrl} target="_blank" rel="noopener noreferrer" className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:border-primary transition-all shadow-glow-primary">
+                          <span className="material-symbols-outlined !text-xl">hub</span>
+                        </a>
+                      )}
+                      {userProfile.linkedinUrl && (
+                        <a href={userProfile.linkedinUrl} target="_blank" rel="noopener noreferrer" className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 hover:text-white hover:border-primary transition-all shadow-glow-primary">
+                          <span className="material-symbols-outlined !text-xl">contact_page</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-4">
                   <button onClick={() => setShowTokenModal(true)} className="bg-white/5 border border-white/10 text-slate-400 font-black px-6 py-4 rounded-2xl hover:bg-white/10 transition-all uppercase tracking-widest text-xs flex items-center gap-2">
@@ -304,6 +316,33 @@ const LandingPage: React.FC<Props> = ({ onStart, onNavigate, userProfile, onPurc
                         </button>
                       </div>
                    </div>
+
+                   {/* Professional Quick Links */}
+                   {(userProfile.githubUrl || userProfile.linkedinUrl) && (
+                     <div className="bg-[#111218] border border-white/5 p-8 rounded-[2.5rem]">
+                        <h3 className="text-white font-bold mb-4 uppercase tracking-tighter text-sm">Professional IDs</h3>
+                        <div className="flex flex-col gap-3">
+                           {userProfile.githubUrl && (
+                             <a href={userProfile.githubUrl} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition-all group">
+                                <div className="flex items-center gap-3">
+                                  <span className="material-symbols-outlined text-primary">hub</span>
+                                  <span className="text-slate-400 text-xs font-bold uppercase tracking-widest">GitHub</span>
+                                </div>
+                                <span className="material-symbols-outlined text-slate-600 group-hover:text-primary transition-colors text-sm">open_in_new</span>
+                             </a>
+                           )}
+                           {userProfile.linkedinUrl && (
+                             <a href={userProfile.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition-all group">
+                                <div className="flex items-center gap-3">
+                                  <span className="material-symbols-outlined text-primary">contact_page</span>
+                                  <span className="text-slate-400 text-xs font-bold uppercase tracking-widest">LinkedIn</span>
+                                </div>
+                                <span className="material-symbols-outlined text-slate-600 group-hover:text-primary transition-colors text-sm">open_in_new</span>
+                             </a>
+                           )}
+                        </div>
+                     </div>
+                   )}
                 </div>
              </div>
           </section>

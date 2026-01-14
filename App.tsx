@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { AppView, UserProfile, PortfolioEntry } from './types';
 import { supabase } from './services/supabaseClient';
@@ -104,6 +103,8 @@ const App: React.FC = () => {
         xp: profileData.xp || 0,
         streak: updatedStreak,
         avatarUrl: profileData.avatar_url || '',
+        githubUrl: profileData.github_url || '',
+        linkedinUrl: profileData.linkedin_url || '',
         teaching: skillsData?.filter(s => s.type === 'teaching').map(s => s.skill_name) || [],
         learning: skillsData?.filter(s => s.type === 'learning').map(s => s.skill_name) || [],
         portfolio: mappedPortfolio
@@ -146,7 +147,9 @@ const App: React.FC = () => {
         { id: '2', skill: 'Python', partnerName: 'Saroj', type: 'learned', date: '2/11/2026', summary: 'Explored neural networks and AI integration.' },
       ],
       level: 1, xp: 120, streak: 3,
-      avatarUrl: ''
+      avatarUrl: '',
+      githubUrl: 'https://github.com',
+      linkedinUrl: 'https://linkedin.com'
     };
     setUserProfile(mockUser);
     setSession({ user: { id: 'demo-id' } });

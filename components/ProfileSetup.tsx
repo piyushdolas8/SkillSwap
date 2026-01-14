@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { supabase } from '../services/supabaseClient';
@@ -30,15 +29,16 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
   const [isUploading, setIsUploading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Draft URL to prevent vanishing during async jumps
+  // Draft values to prevent UI flicker
   const [avatarDraftUrl, setAvatarDraftUrl] = useState<string>(userProfile.avatarUrl || '');
+  const [githubUrl, setGithubUrl] = useState<string>(userProfile.githubUrl || '');
+  const [linkedinUrl, setLinkedinUrl] = useState<string>(userProfile.linkedinUrl || '');
 
-  // Sync draft URL if userProfile changes (e.g. after a fetch)
   useEffect(() => {
-    if (userProfile.avatarUrl) {
-      setAvatarDraftUrl(userProfile.avatarUrl);
-    }
-  }, [userProfile.avatarUrl]);
+    if (userProfile.avatarUrl) setAvatarDraftUrl(userProfile.avatarUrl);
+    if (userProfile.githubUrl) setGithubUrl(userProfile.githubUrl);
+    if (userProfile.linkedinUrl) setLinkedinUrl(userProfile.linkedinUrl);
+  }, [userProfile]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -58,7 +58,6 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Local preview
     const localPreview = URL.createObjectURL(file);
     setAvatarDraftUrl(localPreview);
     setIsUploading(true);
@@ -72,19 +71,16 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
       const fileName = `avatar-${Date.now()}.${fileExt}`;
       const filePath = `public/${userId}/${fileName}`;
 
-      // 1. Storage Upload
       const { error: uploadError } = await supabase.storage
         .from('avatars')
         .upload(filePath, file, { upsert: true, contentType: file.type });
 
       if (uploadError) throw uploadError;
 
-      // 2. Public Link
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')
         .getPublicUrl(filePath);
 
-      // 3. Database Update (Immediate sync so App.tsx fetch doesn't overwrite it)
       await supabase.from('profiles').upsert({ 
         id: userId, 
         avatar_url: publicUrl,
@@ -96,7 +92,6 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
       
     } catch (err: any) {
       console.error("Avatar upload failed:", err);
-      alert("Photo sync failed. Please try again.");
     } finally {
       setIsUploading(false);
     }
@@ -153,12 +148,13 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           email: session.user.email,
           tokens: userProfile.tokens || 5,
           avatar_url: avatarDraftUrl,
-          bio: userProfile.bio
+          bio: userProfile.bio,
+          github_url: githubUrl,
+          linkedin_url: linkedinUrl
         });
 
       if (profileError) throw profileError;
 
-      // Update Skills
       await supabase.from('skills').delete().eq('user_id', userId);
       const skillsToInsert = [
         ...userProfile.teaching.map(s => ({ user_id: userId, skill_name: s, type: 'teaching' })),
@@ -168,6 +164,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
         await supabase.from('skills').insert(skillsToInsert);
       }
 
+      setUserProfile(prev => ({ ...prev, githubUrl, linkedinUrl }));
       onComplete();
     } catch (err: any) {
       console.error("Profile save error:", err);
@@ -194,7 +191,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
           <p className="text-slate-400 text-lg max-w-xl mx-auto font-medium">Configure your presence on the decentralized network.</p>
         </div>
 
-        <div className="bg-card-dark border border-border-dark rounded-[2.5rem] p-10 mb-8 shadow-2xl relative overflow-hidden">
+        <div className="bg-card-dark border border-border-dark rounded-[2.5rem] p-10 mb-8 shadow-2xl">
           <div className="flex flex-col md:flex-row gap-10 items-start">
             <div className="relative group self-center md:self-start">
               <div 
@@ -214,9 +211,6 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                     <p className="text-[10px] font-black text-slate-500 uppercase">Upload Expert ID</p>
                   </div>
                 )}
-                <div className="absolute inset-0 bg-primary/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                   <span className="material-symbols-outlined text-white">edit_square</span>
-                </div>
               </div>
               <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleAvatarChange} />
             </div>
@@ -249,6 +243,41 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
                   onChange={(e) => setUserProfile(prev => ({ ...prev, bio: e.target.value }))}
                   placeholder="Summarize your expert value..."
                   className="w-full bg-background-dark border border-white/5 rounded-xl text-white px-4 py-3 outline-none h-20 resize-none focus:border-primary transition-colors"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card-dark border border-border-dark rounded-[2.5rem] p-10 mb-8 shadow-2xl">
+          <h2 className="text-white text-xl font-bold mb-8 flex items-center gap-3">
+            <span className="material-symbols-outlined text-primary">hub</span>
+            Professional Network
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-2">
+              <label className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] ml-1">GitHub Profile URL</label>
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 !text-lg">link</span>
+                <input 
+                  type="url" 
+                  value={githubUrl}
+                  onChange={(e) => setGithubUrl(e.target.value)}
+                  placeholder="https://github.com/yourusername"
+                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white pl-12 pr-4 py-3 outline-none focus:border-primary transition-colors"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] ml-1">LinkedIn Profile URL</label>
+              <div className="relative">
+                <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 !text-lg">link</span>
+                <input 
+                  type="url" 
+                  value={linkedinUrl}
+                  onChange={(e) => setLinkedinUrl(e.target.value)}
+                  placeholder="https://linkedin.com/in/yourusername"
+                  className="w-full bg-background-dark border border-white/5 rounded-xl text-white pl-12 pr-4 py-3 outline-none focus:border-primary transition-colors"
                 />
               </div>
             </div>
@@ -338,7 +367,7 @@ const ProfileSetup: React.FC<Props> = ({ userProfile, setUserProfile, onComplete
             {isSaving ? (
               <>
                 <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                Finalizing...
+                Syncing Expert ID...
               </>
             ) : (
               <>
