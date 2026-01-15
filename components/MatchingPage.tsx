@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { UserProfile } from '../types';
@@ -12,12 +13,6 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
 
   useEffect(() => {
     const findPeer = async () => {
-      // Safety timeout after 15 seconds
-      timeoutRef.current = window.setTimeout(() => {
-        setStatus('Network congestion. Connecting to global sandbox peer...');
-        fallbackMatch();
-      }, 15000);
-
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
@@ -33,8 +28,8 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
 
         const learningNames = myLearning?.map(s => s.skill_name) || [];
 
-        // 2. Find someone who TEACHES what I want to learn
-        const { data: potentialPeers, error } = await supabase
+        // 2. Try Stage 1: Perfect Match (Someone teaches what I learn)
+        const { data: stage1Peers } = await supabase
           .from('skills')
           .select(`
             user_id,
@@ -46,22 +41,47 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
           .neq('user_id', session.user.id)
           .limit(1);
 
-        if (error) throw error;
+        let matchPartnerData: any = null;
+        let matchSkill: string = 'General Expertise';
 
-        // Artificial delay for high-end "thinking" feel
-        await new Promise(r => setTimeout(r, 1500));
+        if (stage1Peers && stage1Peers.length > 0) {
+          matchPartnerData = stage1Peers[0].profiles;
+          matchSkill = stage1Peers[0].skill_name;
+        } else {
+          // 3. Stage 2: Peer Discovery (Find any other active real user)
+          setStatus('Broadening search to active peer nodes...');
+          const { data: anyPeer } = await supabase
+            .from('profiles')
+            .select('*')
+            .neq('id', session.user.id)
+            .order('last_active_at', { ascending: false })
+            .limit(1)
+            .single();
 
-        if (potentialPeers && potentialPeers.length > 0) {
+          if (anyPeer) {
+            matchPartnerData = anyPeer;
+            // Fetch one of their teaching skills for context
+            const { data: peerSkills } = await supabase
+              .from('skills')
+              .select('skill_name')
+              .eq('user_id', anyPeer.id)
+              .eq('type', 'teaching')
+              .limit(1);
+            matchSkill = peerSkills?.[0]?.skill_name || 'Expertise';
+          }
+        }
+
+        // Delay for better UX feel
+        await new Promise(r => setTimeout(r, 2000));
+
+        if (matchPartnerData) {
           if (timeoutRef.current) clearTimeout(timeoutRef.current);
-          
-          const peerSkill = potentialPeers[0];
-          const peer = peerSkill.profiles as any;
           
           const { data: match, error: matchError } = await supabase
             .from('matches')
             .insert({
               user_1_id: session.user.id,
-              user_2_id: peer.id,
+              user_2_id: matchPartnerData.id,
               status: 'active'
             })
             .select()
@@ -70,45 +90,47 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
           if (matchError) throw matchError;
 
           const partnerProfile: UserProfile = {
-            name: peer.name || 'Anonymous Peer',
-            fullName: peer.full_name || 'Anonymous Peer',
-            email: peer.email || '',
-            teaching: [peerSkill.skill_name],
+            name: matchPartnerData.name || 'Anonymous Peer',
+            fullName: matchPartnerData.full_name || 'Anonymous Peer',
+            email: matchPartnerData.email || '',
+            teaching: [matchSkill],
             learning: [],
-            bio: peer.bio || 'Professional peer educator.',
-            tokens: peer.tokens || 0,
+            bio: matchPartnerData.bio || 'Professional peer educator.',
+            tokens: matchPartnerData.tokens || 0,
             portfolio: [],
-            avatarUrl: peer.avatar_url || `https://picsum.photos/seed/${peer.id}/500/500`,
-            level: peer.level || 1,
-            xp: peer.xp || 0,
-            streak: peer.streak || 0
+            avatarUrl: matchPartnerData.avatar_url || `https://picsum.photos/seed/${matchPartnerData.id}/500/500`,
+            level: matchPartnerData.level || 1,
+            xp: matchPartnerData.xp || 0,
+            streak: matchPartnerData.streak || 0
           };
           onMatchFound(partnerProfile, match.id);
         } else {
-          fallbackMatch();
+          // Final Fallback: Only if the database is literally empty
+          setStatus('Connecting to system sandbox...');
+          handleMockFallback();
         }
       } catch (e) {
         console.error("Match discovery failure:", e);
-        fallbackMatch();
+        handleMockFallback();
       }
     };
 
-    const fallbackMatch = () => {
+    const handleMockFallback = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       onMatchFound({
-        name: 'Alex Rivera',
-        fullName: 'Alex Rivera',
-        email: 'alex@skillswap.io',
+        name: 'System Mentor',
+        fullName: 'SkillSwap AI Sandbox',
+        email: 'bot@skillswap.io',
         teaching: ['Python', 'System Design'],
         learning: ['UI Design'],
-        bio: 'Senior Engineer at TechCorp. Love to teach Python.',
-        tokens: 450,
+        bio: 'Automated sandbox mentor for system testing.',
+        tokens: 999,
         portfolio: [],
-        avatarUrl: 'https://picsum.photos/seed/alex/500/500',
-        level: 12,
-        xp: 4500,
-        streak: 15
-      }, 'sandbox-match-id-' + Date.now());
+        avatarUrl: 'https://picsum.photos/seed/system/500/500',
+        level: 99,
+        xp: 9999,
+        streak: 365
+      }, 'sandbox-' + Date.now());
     };
 
     findPeer();
@@ -120,22 +142,22 @@ const MatchingPage: React.FC<Props> = ({ onMatchFound }) => {
       <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #0d33f2 1px, transparent 0)', backgroundSize: '40px 40px' }}></div>
       <div className="flex flex-col max-w-[960px] w-full items-center justify-center relative z-10 px-6">
         <div className="mb-8 flex items-center gap-2 bg-primary/10 border border-primary/30 px-4 py-2 rounded-full">
-          <span className="material-symbols-outlined text-primary text-sm">code</span>
-          <span className="text-primary font-bold text-sm tracking-widest uppercase">Matching AI Engine Active</span>
+          <span className="material-symbols-outlined text-primary text-sm">hub</span>
+          <span className="text-primary font-black text-[10px] tracking-[0.3em] uppercase">Stage 2 Discovery Protocol Active</span>
         </div>
         <div className="relative w-64 h-64 md:w-80 md:h-80 flex items-center justify-center mb-10">
           <div className="absolute inset-0 rounded-full border border-primary/20 animate-[pulse_3s_linear_infinite]"></div>
           <div className="absolute inset-8 rounded-full border border-primary/20 animate-[pulse_2s_linear_infinite]"></div>
           <div className="relative w-24 h-24 md:w-32 md:h-32 rounded-full bg-primary/20 flex items-center justify-center shadow-[0_0_40px_rgba(13,51,242,0.15)] border border-primary/50 overflow-hidden">
             <div className="w-16 h-16 md:w-24 md:h-24 rounded-full bg-primary/40 flex items-center justify-center border border-primary/60">
-              <span className="material-symbols-outlined text-white text-3xl md:text-5xl animate-bounce">search_insights</span>
+              <span className="material-symbols-outlined text-white text-3xl md:text-5xl animate-bounce">radar</span>
             </div>
             <div className="absolute inset-0 border-t-2 border-primary/50 animate-spin"></div>
           </div>
         </div>
         <div className="text-center max-w-xl">
-          <h1 className="text-white text-3xl md:text-5xl font-bold leading-tight pb-3">Finding your match...</h1>
-          <p className="text-slate-400 text-base md:text-lg font-normal leading-normal pb-8">{status}</p>
+          <h1 className="text-white text-3xl md:text-5xl font-black leading-tight pb-3 uppercase tracking-tighter italic">Locating Peers</h1>
+          <p className="text-slate-500 text-xs font-black uppercase tracking-[0.4em] animate-pulse">{status}</p>
         </div>
       </div>
     </div>
