@@ -117,16 +117,20 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const [partnerMediaStatus, setPartnerMediaStatus] = useState({ isMuted: false, isVideoOff: false });
   
   const [elements, setElements] = useState<CanvasElement[]>([]);
+  const [tempElement, setTempElement] = useState<CanvasElement | null>(null);
   const [drawColor, setDrawColor] = useState('#0d33f2');
   const [drawFontSize, setDrawFontSize] = useState(24);
   const [drawFontFamily, setDrawFontFamily] = useState(SANS_FONT);
   
   const [activeTextInput, setActiveTextInput] = useState<{ x: number, y: number, id: string } | null>(null);
   const [currentTextValue, setCurrentTextValue] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
 
   const isInteractingRef = useRef(false);
   const currentStrokeRef = useRef<Point[]>([]);
   const startPosRef = useRef<Point>({ x: 0, y: 0 });
+  const lastMousePosRef = useRef<Point>({ x: 0, y: 0 });
   const transformModeRef = useRef<TransformMode>(null);
   const initialTransformRef = useRef({ translateX: 0, translateY: 0, scale: 1, rotation: 0 });
 
@@ -136,10 +140,52 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const streamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
+
+  // Added WebRTC Refs for Peer-to-Peer streaming
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+
+  // Initialize WebRTC Peer Connection
+  const initWebRTC = useCallback(() => {
+    if (pcRef.current) return pcRef.current;
+    
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        channelRef.current?.send({
+          type: 'broadcast',
+          event: 'webrtc-ice',
+          payload: { candidate: e.candidate }
+        });
+      }
+    };
+
+    pc.ontrack = (e) => {
+      if (partnerVideoRef.current) {
+        partnerVideoRef.current.srcObject = e.streams[0];
+        remoteStreamRef.current = e.streams[0];
+      }
+    };
+
+    // Add existing tracks to the connection
+    const currentStream = isSharingScreen ? screenStreamRef.current : streamRef.current;
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => pc.addTrack(track, currentStream));
+    } else if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current!));
+    }
+
+    pcRef.current = pc;
+    return pc;
+  }, [isSharingScreen]);
 
   // --- MEDIA HANDLER ---
   useEffect(() => {
@@ -165,16 +211,15 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       mounted = false;
       streamRef.current?.getTracks().forEach(track => track.stop());
       screenStreamRef.current?.getTracks().forEach(track => track.stop());
+      pcRef.current?.close(); // Cleanup WebRTC
     };
   }, []);
 
-  // Handle stream state changes (Camera vs Screen)
   useEffect(() => {
     if (streamRef.current) {
       const videoTracks = streamRef.current.getVideoTracks();
       const audioTracks = streamRef.current.getAudioTracks();
       
-      // If we are sharing screen, camera video tracks should be disabled
       videoTracks.forEach(track => { track.enabled = !isVideoOff && !isSharingScreen; });
       audioTracks.forEach(track => { track.enabled = !isMuted; });
 
@@ -198,25 +243,64 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   // --- SCREEN SHARE IMPLEMENTATION ---
   const handleToggleScreenShare = async () => {
     if (isSharingScreen) {
-      // Stop screen sharing
       screenStreamRef.current?.getTracks().forEach(track => track.stop());
       screenStreamRef.current = null;
       setIsSharingScreen(false);
+      
+      // Restore camera track in WebRTC sender
+      const camVideoTrack = streamRef.current?.getVideoTracks()[0];
+      const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
+      if (sender && camVideoTrack) sender.replaceTrack(camVideoTrack);
+
+      channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen: false } });
     } else {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = stream;
         setIsSharingScreen(true);
         
-        // Handle stop sharing from browser UI
+        // Replace current video track in WebRTC sender
+        const screenTrack = stream.getVideoTracks()[0];
+        const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) sender.replaceTrack(screenTrack);
+        
         stream.getVideoTracks()[0].onended = () => {
           setIsSharingScreen(false);
           screenStreamRef.current = null;
+          
+          // Revert sender to camera
+          const restoredCamTrack = streamRef.current?.getVideoTracks()[0];
+          const restoredSender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
+          if (restoredSender && restoredCamTrack) restoredSender.replaceTrack(restoredCamTrack);
+
+          channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen: false } });
         };
       } catch (err) {
         console.error("Screen share failed:", err);
         setIsSharingScreen(false);
       }
+    }
+  };
+
+  // --- FILE ASSETS HANDLING ---
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsUploading(true);
+    try {
+      const file = files[0];
+      const filePath = `expert-assets/${matchId}/${Date.now()}_${file.name}`;
+      const { data, error } = await supabase.storage.from('assets').upload(filePath, file);
+      if (error) throw error;
+      const { data: { publicUrl } } = supabase.storage.from('assets').getPublicUrl(filePath);
+      const newFile: SharedFile = {
+        id: Math.random().toString(), name: file.name, url: publicUrl, size: file.size, uploader_name: 'Me', created_at: new Date().toISOString()
+      };
+      setSharedFiles(prev => [...prev, newFile]);
+      channelRef.current?.send({ type: 'broadcast', event: 'file-added', payload: { file: newFile } });
+    } catch (err) {
+      console.error("Upload failed:", err);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -230,27 +314,45 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       .on('broadcast', { event: 'element-added' }, (p) => setElements(prev => [...prev, p.payload.element]))
       .on('broadcast', { event: 'element-updated' }, (p) => setElements(prev => prev.map(el => el.id === p.payload.element.id ? p.payload.element : el)))
       .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
-      .on('broadcast', { event: 'media-update' }, (p) => setPartnerMediaStatus(p.payload));
+      .on('broadcast', { event: 'file-added' }, (p) => setSharedFiles(prev => [...prev, p.payload.file]))
+      .on('broadcast', { event: 'media-update' }, (p) => setPartnerMediaStatus(p.payload))
+      // Handle WebRTC Signaling Events
+      .on('broadcast', { event: 'peer-joined' }, async () => {
+        // I was already here, so I will send the offer to the joiner
+        const pc = initWebRTC();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        channel.send({ type: 'broadcast', event: 'webrtc-offer', payload: { offer } });
+      })
+      .on('broadcast', { event: 'webrtc-offer' }, async (p) => {
+        const pc = initWebRTC();
+        await pc.setRemoteDescription(new RTCSessionDescription(p.payload.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        channel.send({ type: 'broadcast', event: 'webrtc-answer', payload: { answer } });
+      })
+      .on('broadcast', { event: 'webrtc-answer' }, async (p) => {
+        await pcRef.current?.setRemoteDescription(new RTCSessionDescription(p.payload.answer));
+      })
+      .on('broadcast', { event: 'webrtc-ice' }, async (p) => {
+        if (p.payload.candidate) {
+          await pcRef.current?.addIceCandidate(new RTCIceCandidate(p.payload.candidate));
+        }
+      });
 
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channelRef.current = channel;
         channel.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen } });
+        // Notify others that I've joined
+        channel.send({ type: 'broadcast', event: 'peer-joined', payload: {} });
       }
     });
     return () => { supabase.removeChannel(channel); };
-  }, [matchId, isMuted, isVideoOff, isSharingScreen]);
+  }, [matchId, isMuted, isVideoOff, isSharingScreen, initWebRTC]);
 
-  // --- CANVAS LOGIC ---
-  const renderCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    elements.forEach(el => {
+  const renderCanvasElements = (ctx: CanvasRenderingContext2D, items: CanvasElement[]) => {
+    items.forEach(el => {
       ctx.save();
       const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
       const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
@@ -260,8 +362,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       ctx.translate(-centerX, -centerY);
       ctx.strokeStyle = el.type === 'eraser' ? '#ffffff' : el.color;
       ctx.lineWidth = el.type === 'eraser' ? 32 : 3;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       if (el.type === 'stroke' || el.type === 'eraser') {
         if (el.points && el.points.length > 0) {
           ctx.beginPath();
@@ -285,7 +386,16 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       }
       ctx.restore();
     });
+  };
 
+  const renderCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    renderCanvasElements(ctx, elements);
+    if (tempElement) renderCanvasElements(ctx, [tempElement]);
     if (selectedId && drawingTool === 'select') {
       const el = elements.find(e => e.id === selectedId);
       if (el) {
@@ -293,28 +403,18 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
         const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
         ctx.translate(el.translateX + centerX, el.translateY + centerY);
-        ctx.rotate(el.rotation);
-        ctx.scale(el.scale, el.scale);
-        ctx.translate(-centerX, -centerY);
-        ctx.strokeStyle = '#0d33f2';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
+        ctx.rotate(el.rotation); ctx.scale(el.scale, el.scale); ctx.translate(-centerX, -centerY);
+        ctx.strokeStyle = '#0d33f2'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
         ctx.strokeRect(el.bbox.minX - 10, el.bbox.minY - 10, (el.bbox.maxX - el.bbox.minX) + 20, (el.bbox.maxY - el.bbox.minY) + 20);
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#0d33f2';
+        ctx.setLineDash([]); ctx.fillStyle = '#0d33f2';
         ctx.fillRect(el.bbox.maxX + 4, el.bbox.maxY + 4, 12, 12);
-        ctx.beginPath();
-        ctx.arc(centerX, el.bbox.minY - 24, 6, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(centerX, el.bbox.minY - 24, 6, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
       }
     }
-  }, [elements, selectedId, drawingTool]);
+  }, [elements, tempElement, selectedId, drawingTool]);
 
-  useEffect(() => {
-    const frame = requestAnimationFrame(renderCanvas);
-    return () => cancelAnimationFrame(frame);
-  }, [renderCanvas]);
+  useEffect(() => { renderCanvas(); }, [renderCanvas]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -322,6 +422,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     startPosRef.current = { x, y };
+    lastMousePosRef.current = { x, y };
+    
     if (drawingTool === 'select') {
       if (selectedId) {
         const el = elements.find(e => e.id === selectedId);
@@ -329,45 +431,30 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
           if (Math.hypot(x - centerX, y - (el.bbox.minY - 24 + el.translateY)) < 24) {
-            transformModeRef.current = 'rotate';
-            initialTransformRef.current = { ...el };
-            isInteractingRef.current = true;
-            return;
+            transformModeRef.current = 'rotate'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return;
           }
           if (Math.hypot(x - (el.bbox.maxX + el.translateX), y - (el.bbox.maxY + el.translateY)) < 24) {
-            transformModeRef.current = 'resize';
-            initialTransformRef.current = { ...el };
-            isInteractingRef.current = true;
-            return;
+            transformModeRef.current = 'resize'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return;
           }
         }
       }
       const hit = [...elements].reverse().find(el => {
         const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
         const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
-        const dx = x - (el.translateX + centerX);
-        const dy = y - (el.translateY + centerY);
-        const cos = Math.cos(-el.rotation);
-        const sin = Math.sin(-el.rotation);
-        const lx = (dx * cos - dy * sin) / el.scale + centerX;
-        const ly = (dx * sin + dy * cos) / el.scale + centerY;
-        return lx >= el.bbox.minX - 10 && lx <= el.bbox.maxX + 10 && ly >= el.bbox.minY - 10 && ly <= el.bbox.maxY + 10;
+        const dx = x - (el.translateX + centerX); const dy = y - (el.translateY + centerY);
+        const cos = Math.cos(-el.rotation); const sin = Math.sin(-el.rotation);
+        const lx = (dx * cos - dy * sin) / el.scale + centerX; const ly = (dx * sin + dy * cos) / el.scale + centerY;
+        return lx >= el.bbox.minX - 12 && lx <= el.bbox.maxX + 12 && ly >= el.bbox.minY - 12 && ly <= el.bbox.maxY + 12;
       });
-      if (hit) {
-        setSelectedId(hit.id);
-        transformModeRef.current = 'move';
-        initialTransformRef.current = { ...hit };
-        isInteractingRef.current = true;
-      } else setSelectedId(null);
+      if (hit) { setSelectedId(hit.id); transformModeRef.current = 'move'; initialTransformRef.current = { ...hit }; isInteractingRef.current = true; } 
+      else setSelectedId(null);
       return;
     }
-    if (drawingTool === 'pencil' || drawingTool === 'eraser') {
-      isInteractingRef.current = true;
-      currentStrokeRef.current = [{ x, y }];
-    } else if (drawingTool === 'rect' || drawingTool === 'circle') isInteractingRef.current = true;
+    if (drawingTool === 'pencil' || drawingTool === 'eraser') { isInteractingRef.current = true; currentStrokeRef.current = [{ x, y }]; } 
+    else if (drawingTool === 'rect' || drawingTool === 'circle') isInteractingRef.current = true;
     else if (drawingTool === 'text') {
-      if (activeTextInput) finalizeText();
-      else { setActiveTextInput({ x, y, id: Math.random().toString() }); setCurrentTextValue(''); }
+      if (activeTextInput && currentTextValue.trim()) finalizeText();
+      else if (!activeTextInput) { setActiveTextInput({ x, y, id: Math.random().toString() }); setCurrentTextValue(''); }
     }
   };
 
@@ -376,22 +463,22 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!rect) return;
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    
+    if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 1.5) return;
+    lastMousePosRef.current = { x, y };
+
     if (drawingTool === 'select' && selectedId && isInteractingRef.current) {
-      const dx = x - startPosRef.current.x;
-      const dy = y - startPosRef.current.y;
+      const dx = x - startPosRef.current.x; const dy = y - startPosRef.current.y;
       setElements(prev => prev.map(el => {
         if (el.id !== selectedId) return el;
         if (transformModeRef.current === 'move') return { ...el, translateX: initialTransformRef.current.translateX + dx, translateY: initialTransformRef.current.translateY + dy };
         if (transformModeRef.current === 'rotate') {
-          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
-          const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX; const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
           return { ...el, rotation: Math.atan2(y - centerY, x - centerX) + Math.PI / 2 };
         }
         if (transformModeRef.current === 'resize') {
-          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
-          const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
-          const ds = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY);
-          const dn = Math.hypot(x - centerX, y - centerY);
+          const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX; const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          const ds = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY); const dn = Math.hypot(x - centerX, y - centerY);
           return { ...el, scale: initialTransformRef.current.scale * (dn / (ds || 1)) };
         }
         return el;
@@ -399,7 +486,21 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       return;
     }
     if (!isInteractingRef.current) return;
-    if (drawingTool === 'pencil' || drawingTool === 'eraser') currentStrokeRef.current.push({ x, y });
+    if (drawingTool === 'pencil' || drawingTool === 'eraser') {
+      currentStrokeRef.current.push({ x, y });
+      const pts = currentStrokeRef.current;
+      setTempElement({
+        id: 'preview', type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
+        points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
+        width: drawingTool === 'eraser' ? 32 : 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
+        bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) }
+      });
+    } else if (drawingTool === 'rect' || drawingTool === 'circle') {
+      setTempElement({
+        id: 'preview', type: drawingTool, color: drawColor, width: 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
+        bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
+      });
+    }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
@@ -407,18 +508,15 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (drawingTool === 'select' && selectedId) {
       const updated = elements.find(el => el.id === selectedId);
       if (updated) channelRef.current?.send({ type: 'broadcast', event: 'element-updated', payload: { element: updated } });
-      isInteractingRef.current = false;
-      transformModeRef.current = null;
-      return;
+      isInteractingRef.current = false; transformModeRef.current = null; return;
     }
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
     let newEl: CanvasElement | null = null;
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       const pts = [...currentStrokeRef.current];
-      if (pts.length < 2) { isInteractingRef.current = false; return; }
+      if (pts.length < 2) { isInteractingRef.current = false; setTempElement(null); return; }
       newEl = {
         id: Math.random().toString(), type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
         points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
@@ -431,19 +529,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
       };
     }
-    if (newEl) {
-      setElements(prev => [...prev, newEl!]);
-      channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
-    }
-    isInteractingRef.current = false;
-    currentStrokeRef.current = [];
+    if (newEl) { setElements(prev => [...prev, newEl!]); channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } }); }
+    isInteractingRef.current = false; currentStrokeRef.current = []; setTempElement(null);
   };
 
   const finalizeText = () => {
     if (!activeTextInput || !currentTextValue.trim()) { setActiveTextInput(null); return; }
     const lines = currentTextValue.split('\n');
-    const h = lines.length * drawFontSize * 1.2;
-    const w = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
+    const h = lines.length * drawFontSize * 1.2; const w = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
     const newEl: CanvasElement = {
       id: activeTextInput.id, type: 'text', text: currentTextValue, color: drawColor, fontSize: drawFontSize, fontFamily: drawFontFamily,
       translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + w, maxY: activeTextInput.y + h },
@@ -451,8 +544,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     };
     setElements(prev => [...prev, newEl]);
     channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
-    setActiveTextInput(null);
-    setCurrentTextValue('');
+    setActiveTextInput(null); setCurrentTextValue('');
   };
 
   const sendMessage = () => {
@@ -488,7 +580,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
            <button onClick={onEnd} className="bg-red-600/10 text-red-500 border border-red-500/20 text-[10px] font-black h-10 px-6 rounded-xl hover:bg-red-600 hover:text-white transition-all uppercase tracking-widest shadow-lg">Disconnect</button>
         </div>
       </header>
-
       <main className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col relative bg-[#080910]">
           {mode === 'code' ? (
@@ -516,7 +607,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
             <div className="flex-1 relative bg-white overflow-hidden animate-in fade-in duration-500">
               <canvas ref={canvasRef} width={2500} height={2500} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
               {activeTextInput && (
-                <textarea ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} onBlur={finalizeText} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }} className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" placeholder="Type here..." style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, minWidth: '220px', maxWidth: '400px' }} />
+                <textarea 
+                  ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} 
+                  onBlur={() => { /* Persists until finalized manually or clicked elsewhere */ }} 
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }} 
+                  className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" 
+                  placeholder="Type here..." style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, minWidth: '220px', maxWidth: '400px' }} 
+                />
               )}
               <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#161a2d]/95 backdrop-blur-xl p-3 rounded-3xl border border-white/10 shadow-2xl z-40">
                  {['select', 'pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
@@ -534,8 +631,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               </div>
             </div>
           )}
-
-          {/* Media Views Overlay */}
           <div className="absolute bottom-6 right-6 flex flex-col gap-4 z-40 pointer-events-none">
              <div className="w-64 aspect-video bg-black rounded-3xl border-2 border-primary/30 overflow-hidden relative shadow-2xl pointer-events-auto transition-transform duration-500">
                 <video ref={partnerVideoRef} autoPlay playsInline className={`w-full h-full object-cover transition-opacity duration-700 ${partnerMediaStatus.isVideoOff ? 'opacity-0' : 'opacity-100'}`} />
@@ -562,8 +657,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                 <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Me</div>
              </div>
           </div>
-
-          {/* Controls Bar */}
           <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/95 backdrop-blur-2xl border border-white/10 p-4 rounded-[2.5rem] shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-40 transition-all hover:scale-105">
              <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
              <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
@@ -574,7 +667,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
              </button>
           </div>
         </div>
-
         <aside className="w-80 h-full border-l border-white/5 flex flex-col bg-[#161a2d] shadow-2xl z-30">
           <div className="flex border-b border-white/5 p-1 bg-black/20">
              <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'chat' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Discussion</button>
@@ -588,7 +680,26 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                     <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-[13px] leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-[#1e2235] text-slate-200 rounded-tl-none border border-white/5'}`}>{msg.text}</div>
                  </div>
                )) : <div className="h-full flex flex-col items-center justify-center text-slate-700 text-center px-10"><span className="material-symbols-outlined !text-5xl mb-4 opacity-10">forum</span><span className="text-[10px] font-black uppercase tracking-widest leading-loose">Exchange ideas with your peer instantly.</span></div>
-             ) : <div className="space-y-4"><button className="w-full py-10 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5">Sync Project Assets</button></div>}
+             ) : (
+               <div className="space-y-4" onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-primary', 'bg-primary/5'); }} onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-primary', 'bg-primary/5'); }} onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-primary', 'bg-primary/5'); handleFileUpload(e.dataTransfer.files); }}>
+                  <input type="file" ref={fileInputRef} className="hidden" onChange={(e) => handleFileUpload(e.target.files)} />
+                  <button onClick={() => fileInputRef.current?.click()} className={`w-full py-10 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5 flex flex-col items-center gap-3 ${isUploading ? 'opacity-50 cursor-wait' : ''}`}>
+                    {isUploading ? <div className="size-6 border-2 border-primary border-t-transparent animate-spin rounded-full"></div> : <><span className="material-symbols-outlined !text-4xl">cloud_upload</span>Sync Project Assets</>}
+                  </button>
+                  <div className="mt-6 space-y-3">
+                    {sharedFiles.map(file => (
+                      <a key={file.id} href={file.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-black/20 rounded-xl border border-white/5 hover:border-primary/50 transition-all group">
+                         <span className="material-symbols-outlined text-primary">description</span>
+                         <div className="flex-1 overflow-hidden">
+                           <p className="text-white text-xs font-bold truncate">{file.name}</p>
+                           <p className="text-slate-600 text-[8px] uppercase font-black">{(file.size / 1024).toFixed(1)} KB • {file.uploader_name}</p>
+                         </div>
+                         <span className="material-symbols-outlined text-slate-600 group-hover:text-white text-sm">download</span>
+                      </a>
+                    ))}
+                  </div>
+               </div>
+             )}
           </div>
           {sidebarTab === 'chat' && (
             <div className="p-4 bg-[#161a2d] border-t border-white/5">
