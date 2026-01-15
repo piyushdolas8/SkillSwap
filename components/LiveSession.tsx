@@ -53,14 +53,11 @@ const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
 
 const highlightCode = (code: string, language: string) => {
   let escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  
   const rules: { regex: RegExp; class: string }[] = [];
-  
   const common = [
     { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, class: 'text-[#ce9178]' },
     { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' },
   ];
-
   const langRules: Record<string, { regex: RegExp; class: string }[]> = {
     javascript: [
       { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' },
@@ -85,12 +82,9 @@ const highlightCode = (code: string, language: string) => {
       { regex: /\b(class|id|style|src|href|alt|type|value|name|onclick|rel|target)\b/g, class: 'text-[#9cdcfe]' },
     ]
   };
-
   rules.push(...(langRules[language] || langRules.javascript), ...common);
-
   const tokens: string[] = [];
   let tempHtml = escaped;
-
   rules.forEach((rule) => {
     tempHtml = tempHtml.replace(rule.regex, (match) => {
       const token = `__TOKEN_${tokens.length}__`;
@@ -98,12 +92,10 @@ const highlightCode = (code: string, language: string) => {
       return token;
     });
   });
-
   let finalHtml = tempHtml;
   for (let i = 0; i < tokens.length; i++) {
     finalHtml = finalHtml.replace(`__TOKEN_${i}__`, tokens[i]);
   }
-
   const lines = finalHtml.split('\n');
   return lines.map((line, i) => `<div class="flex h-[21px] leading-[21px]"><span class="w-[48px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span><span class="flex-1 whitespace-pre">${line || ' '}</span></div>`).join('');
 };
@@ -133,6 +125,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const [currentTextValue, setCurrentTextValue] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   const isInteractingRef = useRef(false);
   const currentStrokeRef = useRef<Point[]>([]);
@@ -140,6 +133,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const lastMousePosRef = useRef<Point>({ x: 0, y: 0 });
   const transformModeRef = useRef<TransformMode>(null);
   const initialTransformRef = useRef({ translateX: 0, translateY: 0, scale: 1, rotation: 0 });
+  const lastRemoteCodeRef = useRef<string>('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const partnerVideoRef = useRef<HTMLVideoElement>(null);
@@ -152,10 +146,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const streamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
-
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
 
+  // Initialize WebRTC Peer Connection
   const initWebRTC = useCallback(() => {
     if (pcRef.current) return pcRef.current;
     
@@ -174,23 +167,27 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     };
 
     pc.ontrack = (e) => {
-      if (partnerVideoRef.current) {
-        partnerVideoRef.current.srcObject = e.streams[0];
-        remoteStreamRef.current = e.streams[0];
+      if (e.streams && e.streams[0]) {
+        setRemoteStream(e.streams[0]);
       }
     };
 
-    const currentStream = isSharingScreen ? screenStreamRef.current : streamRef.current;
-    if (currentStream) {
-      currentStream.getTracks().forEach(track => pc.addTrack(track, currentStream));
-    } else if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current!));
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => pc.addTrack(track, streamRef.current!));
     }
 
     pcRef.current = pc;
     return pc;
-  }, [isSharingScreen]);
+  }, []);
 
+  useEffect(() => {
+    if (partnerVideoRef.current && remoteStream) {
+      partnerVideoRef.current.srcObject = remoteStream;
+      partnerVideoRef.current.play().catch(() => {});
+    }
+  }, [remoteStream]);
+
+  // --- MEDIA HANDLER ---
   useEffect(() => {
     let mounted = true;
     const startMedia = async () => {
@@ -222,16 +219,11 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (streamRef.current) {
       const videoTracks = streamRef.current.getVideoTracks();
       const audioTracks = streamRef.current.getAudioTracks();
-      
       videoTracks.forEach(track => { track.enabled = !isVideoOff && !isSharingScreen; });
       audioTracks.forEach(track => { track.enabled = !isMuted; });
 
       if (videoRef.current) {
-        if (isSharingScreen && screenStreamRef.current) {
-          videoRef.current.srcObject = screenStreamRef.current;
-        } else {
-          videoRef.current.srcObject = streamRef.current;
-        }
+        videoRef.current.srcObject = isSharingScreen && screenStreamRef.current ? screenStreamRef.current : streamRef.current;
         videoRef.current.play().catch(() => {});
       }
 
@@ -248,31 +240,23 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       screenStreamRef.current?.getTracks().forEach(track => track.stop());
       screenStreamRef.current = null;
       setIsSharingScreen(false);
-      
       const camVideoTrack = streamRef.current?.getVideoTracks()[0];
       const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
       if (sender && camVideoTrack) sender.replaceTrack(camVideoTrack);
-
-      channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen: false } });
     } else {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = stream;
         setIsSharingScreen(true);
-        
         const screenTrack = stream.getVideoTracks()[0];
         const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
         if (sender) sender.replaceTrack(screenTrack);
         
         stream.getVideoTracks()[0].onended = () => {
           setIsSharingScreen(false);
-          screenStreamRef.current = null;
-          
           const restoredCamTrack = streamRef.current?.getVideoTracks()[0];
           const restoredSender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
           if (restoredSender && restoredCamTrack) restoredSender.replaceTrack(restoredCamTrack);
-
-          channelRef.current?.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen: false } });
         };
       } catch (err) {
         console.error("Screen share failed:", err);
@@ -305,9 +289,18 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   useEffect(() => {
     if (!matchId) return;
     const channel = supabase.channel(`session:${matchId}`, { config: { broadcast: { self: false } } });
+    
     channel
-      .on('broadcast', { event: 'code-update' }, (p) => { setCode(p.payload.code); if (p.payload.lang) setSelectedLang(p.payload.lang); })
-      .on('broadcast', { event: 'chat-message' }, (p) => setChatMessages(prev => [...prev, p.payload]))
+      .on('broadcast', { event: 'code-update' }, (p) => {
+        if (p.payload.code !== lastRemoteCodeRef.current) {
+          lastRemoteCodeRef.current = p.payload.code;
+          setCode(p.payload.code);
+          if (p.payload.lang) setSelectedLang(p.payload.lang);
+        }
+      })
+      .on('broadcast', { event: 'chat-message' }, (p) => {
+        setChatMessages(prev => [...prev, { ...p.payload, sender: 'partner' }]);
+      })
       .on('broadcast', { event: 'element-added' }, (p) => setElements(prev => [...prev, p.payload.element]))
       .on('broadcast', { event: 'element-updated' }, (p) => setElements(prev => prev.map(el => el.id === p.payload.element.id ? p.payload.element : el)))
       .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
@@ -338,14 +331,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channelRef.current = channel;
-        channel.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen } });
         channel.send({ type: 'broadcast', event: 'peer-joined', payload: {} });
       }
     });
-    return () => { supabase.removeChannel(channel); };
-  }, [matchId, isMuted, isVideoOff, isSharingScreen, initWebRTC]);
 
-  // Utility to get scaled canvas coordinates
+    return () => { supabase.removeChannel(channel); };
+  }, [matchId, initWebRTC]);
+
   const getCanvasCoords = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -424,19 +416,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const { x, y } = getCanvasCoords(e);
     startPosRef.current = { x, y };
     lastMousePosRef.current = { x, y };
-    
     if (drawingTool === 'select') {
       if (selectedId) {
         const el = elements.find(e => e.id === selectedId);
         if (el) {
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
-          if (Math.hypot(x - centerX, y - (el.bbox.minY - 24 + el.translateY)) < 24) {
-            transformModeRef.current = 'rotate'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return;
-          }
-          if (Math.hypot(x - (el.bbox.maxX + el.translateX), y - (el.bbox.maxY + el.translateY)) < 24) {
-            transformModeRef.current = 'resize'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return;
-          }
+          if (Math.hypot(x - centerX, y - (el.bbox.minY - 24 + el.translateY)) < 24) { transformModeRef.current = 'rotate'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return; }
+          if (Math.hypot(x - (el.bbox.maxX + el.translateX), y - (el.bbox.maxY + el.translateY)) < 24) { transformModeRef.current = 'resize'; initialTransformRef.current = { ...el }; isInteractingRef.current = true; return; }
         }
       }
       const hit = [...elements].reverse().find(el => {
@@ -461,10 +448,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const { x, y } = getCanvasCoords(e);
-    
     if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 0.5) return;
     lastMousePosRef.current = { x, y };
-
     if (drawingTool === 'select' && selectedId && isInteractingRef.current) {
       const dx = x - startPosRef.current.x; const dy = y - startPosRef.current.y;
       setElements(prev => prev.map(el => {
@@ -488,16 +473,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       currentStrokeRef.current.push({ x, y });
       const pts = currentStrokeRef.current;
       setTempElement({
-        id: 'preview', type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
-        points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
+        id: 'preview', type: drawingTool === 'eraser' ? 'eraser' : 'stroke', points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
         width: drawingTool === 'eraser' ? 32 : 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
         bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) }
       });
     } else if (drawingTool === 'rect' || drawingTool === 'circle') {
-      setTempElement({
-        id: 'preview', type: drawingTool, color: drawColor, width: 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
-      });
+      setTempElement({ id: 'preview', type: drawingTool, color: drawColor, width: 3, translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) } });
     }
   };
 
@@ -513,17 +494,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       const pts = [...currentStrokeRef.current];
       if (pts.length < 2) { isInteractingRef.current = false; setTempElement(null); return; }
-      newEl = {
-        id: Math.random().toString(), type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
-        points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
-        width: drawingTool === 'eraser' ? 32 : 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) }
-      };
+      newEl = { id: Math.random().toString(), type: drawingTool === 'eraser' ? 'eraser' : 'stroke', points: pts, color: drawingTool === 'eraser' ? '#ffffff' : drawColor, width: drawingTool === 'eraser' ? 32 : 3, translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) } };
     } else if (drawingTool === 'rect' || drawingTool === 'circle') {
-      newEl = {
-        id: Math.random().toString(), type: drawingTool, color: drawColor, width: 3, translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
-      };
+      newEl = { id: Math.random().toString(), type: drawingTool, color: drawColor, width: 3, translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) } };
     }
     if (newEl) { setElements(prev => [...prev, newEl!]); channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } }); }
     isInteractingRef.current = false; currentStrokeRef.current = []; setTempElement(null);
@@ -533,11 +506,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!activeTextInput || !currentTextValue.trim()) { setActiveTextInput(null); return; }
     const lines = currentTextValue.split('\n');
     const h = lines.length * drawFontSize * 1.2; const w = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
-    const newEl: CanvasElement = {
-      id: activeTextInput.id, type: 'text', text: currentTextValue, color: drawColor, fontSize: drawFontSize, fontFamily: drawFontFamily,
-      translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + w, maxY: activeTextInput.y + h },
-      width: 0
-    };
+    const newEl: CanvasElement = { id: activeTextInput.id, type: 'text', text: currentTextValue, color: drawColor, fontSize: drawFontSize, fontFamily: drawFontFamily, translateX: 0, translateY: 0, rotation: 0, scale: 1, bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + w, maxY: activeTextInput.y + h }, width: 0 };
     setElements(prev => [...prev, newEl]);
     channelRef.current?.send({ type: 'broadcast', event: 'element-added', payload: { element: newEl } });
     setActiveTextInput(null); setCurrentTextValue('');
@@ -546,15 +515,20 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const sendMessage = () => {
     if (!messageInput.trim() || !channelRef.current) return;
     const msg: ChatMessage = {
-      id: Date.now().toString(), sender: 'user', name: 'Me', text: messageInput.trim(),
+      id: Date.now().toString(),
+      sender: 'user',
+      name: 'Me',
+      text: messageInput.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
     setChatMessages(prev => [...prev, msg]);
-    channelRef.current.send({ type: 'broadcast', event: 'chat-message', payload: { ...msg, sender: 'partner', name: partner?.name || 'Partner' } });
+    channelRef.current.send({ 
+      type: 'broadcast', 
+      event: 'chat-message', 
+      payload: { ...msg, sender: 'partner', name: partner?.name || 'Partner' } 
+    });
     setMessageInput('');
   };
-
-  const currentTheme = LANGUAGES.find(l => l.id === selectedLang) || LANGUAGES[0];
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#0a0b10] overflow-hidden font-display">
@@ -583,7 +557,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               <div className="h-10 flex items-center justify-between px-6 bg-[#161a2d] border-b border-white/5 shadow-xl z-20">
                 <div className="flex items-center gap-6">
                   <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined !text-sm" style={{ color: currentTheme.color }}>{currentTheme.icon}</span>
+                    <span className="material-symbols-outlined !text-sm" style={{ color: LANGUAGES.find(l => l.id === selectedLang)?.color }}>{LANGUAGES.find(l => l.id === selectedLang)?.icon}</span>
                     <select value={selectedLang} onChange={(e) => { const newLang = e.target.value; setSelectedLang(newLang); setCode(DEFAULT_CODE_TEMPLATES[newLang] || ""); }} className="bg-transparent text-slate-400 text-[11px] font-black uppercase tracking-widest border-none outline-none cursor-pointer hover:text-white transition-colors">
                       {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.name}</option>)}
                     </select>
@@ -594,56 +568,27 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                 </div>
               </div>
               <div className="flex-1 relative overflow-hidden group">
-                 <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }} />
-                 <pre ref={preRef} 
-                   className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500 font-mono text-[13px]" 
-                   style={{ fontFamily: MONO_FONT }}
-                   dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} 
-                 />
-                 <textarea 
-                   ref={editorRef} 
-                   spellCheck={false} 
-                   value={code} 
-                   onScroll={() => { 
-                     if (preRef.current && editorRef.current) { 
-                       preRef.current.scrollTop = editorRef.current.scrollTop; 
-                       preRef.current.scrollLeft = editorRef.current.scrollLeft; 
-                     } 
-                   }} 
-                   onChange={(e) => { 
+                 <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${LANGUAGES.find(l => l.id === selectedLang)?.glow} 0%, transparent 80%)` }} />
+                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500 font-mono text-[13px]" style={{ fontFamily: MONO_FONT }} dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
+                 <textarea ref={editorRef} spellCheck={false} value={code} onScroll={() => { if (preRef.current && editorRef.current) { preRef.current.scrollTop = editorRef.current.scrollTop; preRef.current.scrollLeft = editorRef.current.scrollLeft; } }} onChange={(e) => { 
+                   if (e.target.value !== lastRemoteCodeRef.current) {
                      setCode(e.target.value); 
                      channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
-                   }} 
-                   // Fixed Padding: pre p-6 (24px) + line number span (48px) = 72px left padding
-                   className="absolute inset-0 p-6 pl-[72px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10 font-mono text-[13px]" 
-                   style={{ fontFamily: MONO_FONT }}
-                 />
+                   }
+                 }} className="absolute inset-0 p-6 pl-[72px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10 font-mono text-[13px]" style={{ fontFamily: MONO_FONT }} />
               </div>
             </div>
           ) : (
             <div className="flex-1 relative bg-white overflow-hidden animate-in fade-in duration-500">
               <canvas ref={canvasRef} width={2500} height={2500} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
               {activeTextInput && (
-                <textarea 
-                  ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} 
-                  onBlur={() => { /* Persists until finalized manually or clicked elsewhere */ }} 
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }} 
-                  className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" 
-                  placeholder="Type here..." style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, minWidth: '220px', maxWidth: '400px' }} 
-                />
+                <textarea ref={textInputRef} autoFocus value={currentTextValue} onChange={(e) => setCurrentTextValue(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }} className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" placeholder="Type here..." style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, minWidth: '220px', maxWidth: '400px' }} />
               )}
               <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#161a2d]/95 backdrop-blur-xl p-3 rounded-3xl border border-white/10 shadow-2xl z-40">
                  {['select', 'pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
-                   <button key={tool} onClick={() => { setDrawingTool(tool as DrawingTool); if (tool !== 'select') setSelectedId(null); }} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === tool ? 'bg-primary text-white scale-110 shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}>
-                     <span className="material-symbols-outlined !text-xl">{tool === 'select' ? 'near_me' : tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span>
-                   </button>
+                   <button key={tool} onClick={() => { setDrawingTool(tool as DrawingTool); if (tool !== 'select') setSelectedId(null); }} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === tool ? 'bg-primary text-white scale-110 shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}><span className="material-symbols-outlined !text-xl">{tool === 'select' ? 'near_me' : tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span></button>
                  ))}
                  <div className="h-px w-full bg-white/10 my-1" />
-                 {drawingTool === 'text' && (
-                   <div className="flex flex-col gap-2 animate-in fade-in zoom-in-95">
-                      {[16, 24, 32, 48].map(size => <button key={size} onClick={() => setDrawFontSize(size)} className={`text-[9px] font-black w-full py-1.5 rounded-lg border ${drawFontSize === size ? 'bg-primary border-primary text-white' : 'border-white/5 text-slate-500'}`}>{size}PX</button>)}
-                   </div>
-                 )}
                  <button onClick={() => { setElements([]); setSelectedId(null); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-500 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete_sweep</span></button>
               </div>
             </div>
@@ -657,31 +602,20 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                     <span className="text-[9px] font-black uppercase tracking-widest mt-3">Node Offline</span>
                   </div>
                 )}
-                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/70 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">
-                   {partner?.name || 'Partner'}
-                </div>
+                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/70 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">{partner?.name || 'Partner'}</div>
              </div>
              <div className="w-48 aspect-video bg-black rounded-3xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end group overflow-hidden">
                 <video ref={videoRef} autoPlay muted playsInline className={`w-full h-full object-cover transition-opacity duration-700 ${!isSharingScreen ? 'scale-x-[-1]' : 'scale-x-[1]'} ${isVideoOff && !isSharingScreen ? 'opacity-0' : 'opacity-100'}`} />
-                {isSharingScreen && (
-                  <div className="absolute top-2 left-2 bg-primary px-2 py-0.5 rounded text-[8px] font-black uppercase text-white shadow-glow">Sharing Screen</div>
-                )}
                 {isVideoOff && !isSharingScreen && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#161a2d] text-slate-600">
-                    <span className="material-symbols-outlined !text-3xl">videocam_off</span>
-                  </div>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#161a2d] text-slate-600"><span className="material-symbols-outlined !text-3xl">videocam_off</span></div>
                 )}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Me</div>
              </div>
           </div>
           <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/95 backdrop-blur-2xl border border-white/10 p-4 rounded-[2.5rem] shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-40 transition-all hover:scale-105">
              <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
              <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
              <div className="h-8 w-px bg-white/10 mx-2" />
-             <button onClick={handleToggleScreenShare} className={`px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 ${isSharingScreen ? 'bg-primary text-white shadow-glow' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
-                <span className="material-symbols-outlined text-lg">{isSharingScreen ? 'stop_screen_share' : 'screen_share'}</span> 
-                {isSharingScreen ? 'Stop Sharing' : 'Mirror Screen'}
-             </button>
+             <button onClick={handleToggleScreenShare} className={`px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 ${isSharingScreen ? 'bg-primary text-white shadow-glow' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined text-lg">{isSharingScreen ? 'stop_screen_share' : 'screen_share'}</span> {isSharingScreen ? 'Stop Sharing' : 'Mirror Screen'}</button>
           </div>
         </div>
         <aside className="w-80 h-full border-l border-white/5 flex flex-col bg-[#161a2d] shadow-2xl z-30">
@@ -689,32 +623,29 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
              <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'chat' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Discussion</button>
              <button onClick={() => setSidebarTab('files')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'files' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Assets</button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 custom-scrollbar bg-black/20">
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 bg-black/20">
              {sidebarTab === 'chat' ? (
-               chatMessages.length > 0 ? chatMessages.map((msg, i) => (
+               chatMessages.map((msg, i) => (
                  <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
                     <div className="flex items-center gap-2 mb-1.5 px-1"><span className="text-[10px] font-black uppercase text-slate-500">{msg.name}</span><span className="text-[8px] font-bold text-slate-700">{msg.timestamp}</span></div>
                     <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-[13px] leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-[#1e2235] text-slate-200 rounded-tl-none border border-white/5'}`}>{msg.text}</div>
                  </div>
-               )) : <div className="h-full flex flex-col items-center justify-center text-slate-700 text-center px-10"><span className="material-symbols-outlined !text-5xl mb-4 opacity-10">forum</span><span className="text-[10px] font-black uppercase tracking-widest leading-loose">Exchange ideas with your peer instantly.</span></div>
+               ))
              ) : (
-               <div className="space-y-4" onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-primary', 'bg-primary/5'); }} onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-primary', 'bg-primary/5'); }} onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-primary', 'bg-primary/5'); handleFileUpload(e.dataTransfer.files); }}>
+               <div className="space-y-4">
                   <input type="file" ref={fileInputRef} className="hidden" onChange={(e) => handleFileUpload(e.target.files)} />
                   <button onClick={() => fileInputRef.current?.click()} className={`w-full py-10 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5 flex flex-col items-center gap-3 ${isUploading ? 'opacity-50 cursor-wait' : ''}`}>
                     {isUploading ? <div className="size-6 border-2 border-primary border-t-transparent animate-spin rounded-full"></div> : <><span className="material-symbols-outlined !text-4xl">cloud_upload</span>Sync Project Assets</>}
                   </button>
-                  <div className="mt-6 space-y-3">
-                    {sharedFiles.map(file => (
-                      <a key={file.id} href={file.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-black/20 rounded-xl border border-white/5 hover:border-primary/50 transition-all group">
-                         <span className="material-symbols-outlined text-primary">description</span>
-                         <div className="flex-1 overflow-hidden">
-                           <p className="text-white text-xs font-bold truncate">{file.name}</p>
-                           <p className="text-slate-600 text-[8px] uppercase font-black">{(file.size / 1024).toFixed(1)} KB • {file.uploader_name}</p>
-                         </div>
-                         <span className="material-symbols-outlined text-slate-600 group-hover:text-white text-sm">download</span>
-                      </a>
-                    ))}
-                  </div>
+                  {sharedFiles.map(file => (
+                    <a key={file.id} href={file.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-black/20 rounded-xl border border-white/5 hover:border-primary/50 transition-all group">
+                       <span className="material-symbols-outlined text-primary">description</span>
+                       <div className="flex-1 overflow-hidden">
+                         <p className="text-white text-xs font-bold truncate">{file.name}</p>
+                         <p className="text-slate-600 text-[8px] uppercase font-black">{(file.size / 1024).toFixed(1)} KB • {file.uploader_name}</p>
+                       </div>
+                    </a>
+                  ))}
                </div>
              )}
           </div>
