@@ -11,6 +11,7 @@ type TransformMode = 'move' | 'rotate' | 'resize' | null;
 interface Props {
   matchId: string | null;
   partner: UserProfile | null;
+  userProfile: UserProfile;
   skill?: string;
   onEnd: () => void;
 }
@@ -100,7 +101,7 @@ const highlightCode = (code: string, language: string) => {
   return lines.map((line, i) => `<div class="flex h-[21px] leading-[21px]"><span class="w-[48px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span><span class="flex-1 whitespace-pre">${line || ' '}</span></div>`).join('');
 };
 
-const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEnd }) => {
+const LiveSession: React.FC<Props> = ({ matchId, partner, userProfile, skill = 'python', onEnd }) => {
   const [mode, setMode] = useState<SessionMode>('code');
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chat');
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('select');
@@ -113,7 +114,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
-  const [partnerMediaStatus, setPartnerMediaStatus] = useState({ isMuted: false, isVideoOff: false });
+  const [partnerMediaStatus, setPartnerMediaStatus] = useState({ isMuted: false, isVideoOff: false, name: partner?.name || 'Partner' });
   
   const [elements, setElements] = useState<CanvasElement[]>([]);
   const [tempElement, setTempElement] = useState<CanvasElement | null>(null);
@@ -148,7 +149,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const channelRef = useRef<any>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
-  // Initialize WebRTC Peer Connection
   const initWebRTC = useCallback(() => {
     if (pcRef.current) return pcRef.current;
     
@@ -187,7 +187,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
   }, [remoteStream]);
 
-  // --- MEDIA HANDLER ---
   useEffect(() => {
     let mounted = true;
     const startMedia = async () => {
@@ -230,10 +229,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       channelRef.current?.send({ 
         type: 'broadcast', 
         event: 'media-update', 
-        payload: { isMuted, isVideoOff, isSharingScreen } 
+        payload: { isMuted, isVideoOff, isSharingScreen, name: userProfile.name } 
       });
     }
-  }, [isVideoOff, isMuted, isSharingScreen]);
+  }, [isVideoOff, isMuted, isSharingScreen, userProfile.name]);
 
   const handleToggleScreenShare = async () => {
     if (isSharingScreen) {
@@ -275,7 +274,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       if (error) throw error;
       const { data: { publicUrl } } = supabase.storage.from('assets').getPublicUrl(filePath);
       const newFile: SharedFile = {
-        id: Math.random().toString(), name: file.name, url: publicUrl, size: file.size, uploader_name: 'Me', created_at: new Date().toISOString()
+        id: Math.random().toString(), name: file.name, url: publicUrl, size: file.size, uploader_name: userProfile.name, created_at: new Date().toISOString()
       };
       setSharedFiles(prev => [...prev, newFile]);
       channelRef.current?.send({ type: 'broadcast', event: 'file-added', payload: { file: newFile } });
@@ -332,11 +331,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       if (status === 'SUBSCRIBED') {
         channelRef.current = channel;
         channel.send({ type: 'broadcast', event: 'peer-joined', payload: {} });
+        channel.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen, name: userProfile.name } });
       }
     });
 
     return () => { supabase.removeChannel(channel); };
-  }, [matchId, initWebRTC]);
+  }, [matchId, initWebRTC, userProfile.name, isMuted, isVideoOff, isSharingScreen]);
 
   const getCanvasCoords = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -517,7 +517,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const msg: ChatMessage = {
       id: Date.now().toString(),
       sender: 'user',
-      name: 'Me',
+      name: userProfile.name,
       text: messageInput.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
@@ -525,7 +525,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     channelRef.current.send({ 
       type: 'broadcast', 
       event: 'chat-message', 
-      payload: { ...msg, sender: 'partner', name: partner?.name || 'Partner' } 
+      payload: { ...msg, sender: 'partner' } 
     });
     setMessageInput('');
   };
@@ -602,7 +602,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                     <span className="text-[9px] font-black uppercase tracking-widest mt-3">Node Offline</span>
                   </div>
                 )}
-                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/70 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">{partner?.name || 'Partner'}</div>
+                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/70 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">{partnerMediaStatus.name || 'Partner'}</div>
              </div>
              <div className="w-48 aspect-video bg-black rounded-3xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end group overflow-hidden">
                 <video ref={videoRef} autoPlay muted playsInline className={`w-full h-full object-cover transition-opacity duration-700 ${!isSharingScreen ? 'scale-x-[-1]' : 'scale-x-[1]'} ${isVideoOff && !isSharingScreen ? 'opacity-0' : 'opacity-100'}`} />

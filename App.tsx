@@ -281,7 +281,7 @@ const App: React.FC = () => {
       case AppView.MATCH_FOUND:
         return <MatchFoundPage partner={partnerProfile} onJoin={() => navigate(AppView.LIVE_SESSION)} />;
       case AppView.LIVE_SESSION:
-        return <LiveSession matchId={currentMatchId} partner={partnerProfile} skill={userProfile.learning[0] || 'Python'} onEnd={() => navigate(AppView.FEEDBACK)} />;
+        return <LiveSession matchId={currentMatchId} partner={partnerProfile} userProfile={userProfile} skill={userProfile.learning[0] || 'Python'} onEnd={() => navigate(AppView.FEEDBACK)} />;
       case AppView.FEEDBACK:
         return <FeedbackPage userProfile={userProfile} setUserProfile={setUserProfile} partner={partnerProfile} onFinish={() => navigate(AppView.LANDING)} />;
       case AppView.MARKETPLACE:
