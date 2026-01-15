@@ -31,11 +31,11 @@ const MONO_FONT = '"JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, mo
 const SANS_FONT = '"Space Grotesk", sans-serif';
 
 const LANGUAGES = [
-  { id: 'python', name: 'Python', color: '#3776ab' },
-  { id: 'javascript', name: 'JavaScript', color: '#f7df1e' },
-  { id: 'typescript', name: 'TypeScript', color: '#3178c6' },
-  { id: 'cpp', name: 'C++', color: '#659ad2' },
-  { id: 'html', name: 'HTML/CSS', color: '#e34f26' }
+  { id: 'python', name: 'Python' },
+  { id: 'javascript', name: 'JavaScript' },
+  { id: 'typescript', name: 'TypeScript' },
+  { id: 'cpp', name: 'C++' },
+  { id: 'html', name: 'HTML/CSS' }
 ];
 
 const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
@@ -84,7 +84,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const [selectedLang, setSelectedLang] = useState(skill.toLowerCase());
   const [code, setCode] = useState<string>(DEFAULT_CODE_TEMPLATES[skill.toLowerCase()] || DEFAULT_CODE_TEMPLATES['python']);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
   const [messageInput, setMessageInput] = useState('');
   
   const [isMuted, setIsMuted] = useState(false);
@@ -115,7 +114,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const streamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
 
-  // Media Stream Setup & Maintenance
+  // --- MEDIA HANDLER (FIXED FOR BLACK SCREEN) ---
   useEffect(() => {
     const startMedia = async () => {
       try {
@@ -123,35 +122,42 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(console.error);
+          // Important: Call play explicitly
+          const playPromise = videoRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(error => console.warn("Auto-play was prevented", error));
+          }
         }
       } catch (err) {
-        console.error("Media error:", err);
+        console.error("Media initialization failed:", err);
       }
     };
     startMedia();
     return () => streamRef.current?.getTracks().forEach(track => track.stop());
   }, []);
 
-  // Sync Media State to tracks and remote partner
   useEffect(() => {
     if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(t => t.enabled = !isMuted);
-      streamRef.current.getVideoTracks().forEach(t => t.enabled = !isVideoOff);
+      const audioTracks = streamRef.current.getAudioTracks();
+      const videoTracks = streamRef.current.getVideoTracks();
       
+      audioTracks.forEach(t => t.enabled = !isMuted);
+      videoTracks.forEach(t => t.enabled = !isVideoOff);
+      
+      // Ensure element restarts if it was stopped by browser
+      if (!isVideoOff && videoRef.current && videoRef.current.paused) {
+        videoRef.current.play().catch(() => {});
+      }
+
       channelRef.current?.send({ 
         type: 'broadcast', 
         event: 'media-update', 
         payload: { isMuted, isVideoOff } 
       });
-
-      if (!isVideoOff && videoRef.current) {
-        videoRef.current.play().catch(console.error);
-      }
     }
   }, [isMuted, isVideoOff]);
 
-  // Network Sync Setup
+  // --- NETWORK SYNC ---
   useEffect(() => {
     if (!matchId) return;
     const channel = supabase.channel(`session:${matchId}`, { config: { broadcast: { self: false } } });
@@ -172,11 +178,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     return () => { supabase.removeChannel(channel); };
   }, [matchId, isMuted, isVideoOff]);
 
+  // --- CANVAS RENDERING (SMOOTH) ---
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     elements.forEach(el => {
@@ -190,14 +198,17 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       ctx.translate(-centerX, -centerY);
       
       ctx.strokeStyle = el.type === 'eraser' ? '#ffffff' : el.color;
-      ctx.lineWidth = el.type === 'eraser' ? 24 : 3;
+      ctx.lineWidth = el.type === 'eraser' ? 32 : 3;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
       if (el.type === 'stroke' || el.type === 'eraser') {
-        if (el.points) {
+        if (el.points && el.points.length > 0) {
           ctx.beginPath();
-          el.points.forEach((pt, i) => i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+          ctx.moveTo(el.points[0].x, el.points[0].y);
+          for (let i = 1; i < el.points.length; i++) {
+            ctx.lineTo(el.points[i].x, el.points[i].y);
+          }
           ctx.stroke();
         }
       } else if (el.type === 'rect') {
@@ -212,7 +223,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         ctx.fillStyle = el.color; 
         ctx.font = `${el.fontSize || 24}px ${el.fontFamily || SANS_FONT}`; 
         ctx.textBaseline = 'top';
-        el.text.split('\n').forEach((line, i) => ctx.fillText(line, el.bbox.minX, el.bbox.minY + i * (el.fontSize || 24) * 1.2));
+        const lines = el.text.split('\n');
+        lines.forEach((line, i) => ctx.fillText(line, el.bbox.minX, el.bbox.minY + i * (el.fontSize || 24) * 1.2));
       }
       ctx.restore();
     });
@@ -230,13 +242,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         
         ctx.strokeStyle = '#0d33f2';
         ctx.lineWidth = 2;
-        ctx.setLineDash([6, 4]);
-        ctx.strokeRect(el.bbox.minX - 6, el.bbox.minY - 6, (el.bbox.maxX - el.bbox.minX) + 12, (el.bbox.maxY - el.bbox.minY) + 12);
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(el.bbox.minX - 8, el.bbox.minY - 8, (el.bbox.maxX - el.bbox.minX) + 16, (el.bbox.maxY - el.bbox.minY) + 16);
         
         ctx.setLineDash([]);
         ctx.fillStyle = '#0d33f2';
         // Resize handle
-        ctx.fillRect(el.bbox.maxX + 4, el.bbox.maxY + 4, 10, 10);
+        ctx.fillRect(el.bbox.maxX + 4, el.bbox.maxY + 4, 12, 12);
         // Rotate handle
         ctx.beginPath();
         ctx.arc(centerX, el.bbox.minY - 24, 6, 0, Math.PI * 2);
@@ -246,8 +258,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
   }, [elements, selectedId, drawingTool]);
 
-  useEffect(() => renderCanvas(), [renderCanvas]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(renderCanvas);
+    return () => cancelAnimationFrame(frame);
+  }, [renderCanvas]);
 
+  // --- INTERACTION LOGIC ---
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -261,6 +277,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         if (el) {
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          
           if (Math.hypot(x - centerX, y - (el.bbox.minY - 24 + el.translateY)) < 24) {
             transformModeRef.current = 'rotate';
             initialTransformRef.current = { ...el };
@@ -276,7 +293,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         }
       }
 
-      // Hit test elements with basic inverse coordinate mapping
+      // Hit testing with coordinate projection
       const hit = [...elements].reverse().find(el => {
         const centerX = (el.bbox.minX + el.bbox.maxX) / 2;
         const centerY = (el.bbox.minY + el.bbox.maxY) / 2;
@@ -284,9 +301,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         const dy = y - (el.translateY + centerY);
         const cos = Math.cos(-el.rotation);
         const sin = Math.sin(-el.rotation);
-        const localX = (dx * cos - dy * sin) / el.scale + centerX;
-        const localY = (dx * sin + dy * cos) / el.scale + centerY;
-        return localX >= el.bbox.minX && localX <= el.bbox.maxX && localY >= el.bbox.minY && localY <= el.bbox.maxY;
+        const lx = (dx * cos - dy * sin) / el.scale + centerX;
+        const ly = (dx * sin + dy * cos) / el.scale + centerY;
+        return lx >= el.bbox.minX - 5 && lx <= el.bbox.maxX + 5 && ly >= el.bbox.minY - 5 && ly <= el.bbox.maxY + 5;
       });
 
       if (hit) {
@@ -307,7 +324,10 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       isInteractingRef.current = true;
     } else if (drawingTool === 'text') {
       if (activeTextInput) finalizeText();
-      else setActiveTextInput({ x, y, id: Math.random().toString() });
+      else {
+        setActiveTextInput({ x, y, id: Math.random().toString() });
+        setCurrentTextValue('');
+      }
     }
   };
 
@@ -334,9 +354,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         if (transformModeRef.current === 'resize') {
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
-          const distStart = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY);
-          const distNow = Math.hypot(x - centerX, y - centerY);
-          return { ...el, scale: initialTransformRef.current.scale * (distNow / (distStart || 1)) };
+          const ds = Math.hypot(startPosRef.current.x - centerX, startPosRef.current.y - centerY);
+          const dn = Math.hypot(x - centerX, y - centerY);
+          return { ...el, scale: initialTransformRef.current.scale * (dn / (ds || 1)) };
         }
         return el;
       }));
@@ -344,29 +364,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
 
     if (!isInteractingRef.current) return;
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
 
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       currentStrokeRef.current.push({ x, y });
-      ctx.strokeStyle = drawingTool === 'eraser' ? '#ffffff' : drawColor;
-      ctx.lineWidth = drawingTool === 'eraser' ? 24 : 3;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      const last = currentStrokeRef.current[currentStrokeRef.current.length - 2];
-      if (last) { ctx.moveTo(last.x, last.y); ctx.lineTo(x, y); ctx.stroke(); }
-    } else if (drawingTool === 'rect') {
-      renderCanvas();
-      ctx.strokeStyle = drawColor; ctx.lineWidth = 3;
-      ctx.strokeRect(startPosRef.current.x, startPosRef.current.y, x - startPosRef.current.x, y - startPosRef.current.y);
-    } else if (drawingTool === 'circle') {
-      renderCanvas();
-      ctx.strokeStyle = drawColor; ctx.lineWidth = 3;
-      const rx = (x - startPosRef.current.x) / 2;
-      const ry = (y - startPosRef.current.y) / 2;
-      ctx.beginPath();
-      ctx.ellipse(startPosRef.current.x + rx, startPosRef.current.y + ry, Math.abs(rx), Math.abs(ry), 0, 0, 2 * Math.PI);
-      ctx.stroke();
     }
   };
 
@@ -385,18 +385,24 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     if (!rect) return;
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
     let newEl: CanvasElement | null = null;
 
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
-      const pts = currentStrokeRef.current;
+      const pts = [...currentStrokeRef.current];
       newEl = {
         id: Math.random().toString(),
         type: drawingTool === 'eraser' ? 'eraser' : 'stroke',
         points: pts,
         color: drawingTool === 'eraser' ? '#ffffff' : drawColor,
-        width: drawingTool === 'eraser' ? 24 : 3,
+        width: drawingTool === 'eraser' ? 32 : 3,
         translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX: Math.min(...pts.map(p => p.x)), minY: Math.min(...pts.map(p => p.y)), maxX: Math.max(...pts.map(p => p.x)), maxY: Math.max(...pts.map(p => p.y)) }
+        bbox: { 
+          minX: Math.min(...pts.map(p => p.x)), 
+          minY: Math.min(...pts.map(p => p.y)), 
+          maxX: Math.max(...pts.map(p => p.x)), 
+          maxY: Math.max(...pts.map(p => p.y)) 
+        }
       };
     } else if (drawingTool === 'rect' || drawingTool === 'circle') {
       newEl = {
@@ -405,7 +411,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         color: drawColor,
         width: 3,
         translateX: 0, translateY: 0, rotation: 0, scale: 1,
-        bbox: { minX: Math.min(startPosRef.current.x, x), minY: Math.min(startPosRef.current.y, y), maxX: Math.max(startPosRef.current.x, x), maxY: Math.max(startPosRef.current.y, y) }
+        bbox: { 
+          minX: Math.min(startPosRef.current.x, x), 
+          minY: Math.min(startPosRef.current.y, y), 
+          maxX: Math.max(startPosRef.current.x, x), 
+          maxY: Math.max(startPosRef.current.y, y) 
+        }
       };
     }
 
@@ -420,8 +431,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const finalizeText = () => {
     if (!activeTextInput || !currentTextValue.trim()) { setActiveTextInput(null); return; }
     const lines = currentTextValue.split('\n');
-    const height = lines.length * drawFontSize * 1.2;
-    const width = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
+    const h = lines.length * drawFontSize * 1.2;
+    const w = Math.max(...lines.map(l => l.length)) * (drawFontSize * 0.6);
     const newEl: CanvasElement = {
       id: activeTextInput.id,
       type: 'text',
@@ -430,7 +441,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       fontSize: drawFontSize,
       fontFamily: drawFontFamily,
       translateX: 0, translateY: 0, rotation: 0, scale: 1,
-      bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + width, maxY: activeTextInput.y + height },
+      bbox: { minX: activeTextInput.x, minY: activeTextInput.y, maxX: activeTextInput.x + w, maxY: activeTextInput.y + h },
       width: 0
     };
     setElements(prev => [...prev, newEl]);
@@ -454,23 +465,23 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#111218] overflow-hidden font-display">
+    <div className="flex flex-col h-screen w-full bg-[#0d0e14] overflow-hidden font-display">
       <header className="flex items-center justify-between border-b border-white/5 px-6 py-3 bg-[#161a2d] z-50">
         <div className="flex items-center gap-6">
           <div className="size-8 text-primary">
             <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path clipRule="evenodd" d="M24 0.757355L47.2426 24L24 47.2426L0.757355 24L24 0.757355ZM21 35.7574V12.2426L9.24264 24L21 35.7574Z" fill="currentColor" fillRule="evenodd"></path></svg>
           </div>
-          <div className="flex bg-black/20 rounded-xl p-1 border border-white/5">
-            <button onClick={() => setMode('code')} className={`px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'code' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>IDE Mode</button>
-            <button onClick={() => setMode('draw')} className={`px-6 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'draw' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Whiteboard</button>
+          <div className="flex bg-black/30 rounded-xl p-1 border border-white/5">
+            <button onClick={() => setMode('code')} className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'code' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>IDE Mode</button>
+            <button onClick={() => setMode('draw')} className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'draw' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Whiteboard</button>
           </div>
         </div>
         <div className="flex items-center gap-6">
            <div className="flex items-center gap-3 px-4 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
               <span className="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Active Sync</span>
+              <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Live Exchange Active</span>
            </div>
-           <button onClick={onEnd} className="bg-red-600 text-white text-[10px] font-black h-10 px-6 rounded-xl hover:brightness-110 transition-all uppercase tracking-widest shadow-lg">End Session</button>
+           <button onClick={onEnd} className="bg-red-600 text-white text-[10px] font-black h-10 px-6 rounded-xl hover:brightness-110 transition-all uppercase tracking-widest shadow-lg">Terminate Session</button>
         </div>
       </header>
 
@@ -479,9 +490,11 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
           {mode === 'code' ? (
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="h-10 flex items-center justify-between px-6 bg-[#161a2d] border-b border-white/5">
-                <select value={selectedLang} onChange={(e) => setSelectedLang(e.target.value)} className="bg-transparent text-slate-400 text-[11px] font-bold border-none outline-none cursor-pointer hover:text-white transition-colors">
-                  {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.id.toUpperCase()}</option>)}
-                </select>
+                <div className="flex items-center gap-4">
+                  <select value={selectedLang} onChange={(e) => setSelectedLang(e.target.value)} className="bg-transparent text-slate-400 text-[11px] font-bold border-none outline-none cursor-pointer hover:text-white transition-colors">
+                    {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.id.toUpperCase()}</option>)}
+                  </select>
+                </div>
               </div>
               <div className="flex-1 relative font-mono text-sm">
                  <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-relaxed overflow-hidden" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) + '\n' }} />
@@ -490,7 +503,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
             </div>
           ) : (
             <div className="flex-1 relative bg-white overflow-hidden">
-              <canvas ref={canvasRef} width={2000} height={2000} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
+              <canvas ref={canvasRef} width={2500} height={2500} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
               {activeTextInput && (
                 <textarea 
                   ref={textInputRef} 
@@ -499,12 +512,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                   onChange={(e) => setCurrentTextValue(e.target.value)} 
                   onBlur={finalizeText} 
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }}
-                  className="absolute bg-white/5 border border-primary outline-none p-2 rounded-lg text-2xl shadow-xl backdrop-blur-md transition-shadow" 
-                  style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, color: drawColor, minWidth: '160px' }} 
+                  className="absolute bg-white/10 border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400" 
+                  placeholder="Type here..."
+                  style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, color: drawColor, minWidth: '200px', maxWidth: '400px' }} 
                 />
               )}
               
-              <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#161a2d]/90 backdrop-blur-xl p-3 rounded-3xl border border-white/10 shadow-2xl z-40">
+              <div className="absolute top-6 left-6 flex flex-col gap-2 bg-[#161a2d]/95 backdrop-blur-xl p-3 rounded-3xl border border-white/10 shadow-2xl z-40">
                  {['select', 'pencil', 'eraser', 'text', 'rect', 'circle'].map(tool => (
                    <button key={tool} onClick={() => { setDrawingTool(tool as DrawingTool); if (tool !== 'select') setSelectedId(null); }} className={`size-10 flex items-center justify-center rounded-xl transition-all ${drawingTool === tool ? 'bg-primary text-white scale-110 shadow-glow' : 'text-slate-400 hover:bg-white/5'}`}>
                      <span className="material-symbols-outlined !text-xl">{tool === 'select' ? 'near_me' : tool === 'pencil' ? 'edit' : tool === 'eraser' ? 'ink_eraser' : tool === 'text' ? 'title' : tool === 'rect' ? 'rectangle' : 'circle'}</span>
@@ -514,86 +528,84 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                  {drawingTool === 'text' && (
                    <div className="flex flex-col gap-2 animate-in fade-in zoom-in-95">
                       {[16, 24, 32, 48].map(size => (
-                        <button key={size} onClick={() => setDrawFontSize(size)} className={`text-[9px] font-black w-full py-1 rounded-lg border ${drawFontSize === size ? 'bg-primary border-primary text-white' : 'border-white/5 text-slate-500'}`}>{size}PX</button>
+                        <button key={size} onClick={() => setDrawFontSize(size)} className={`text-[9px] font-black w-full py-1.5 rounded-lg border ${drawFontSize === size ? 'bg-primary border-primary text-white' : 'border-white/5 text-slate-500'}`}>{size}PX</button>
                       ))}
                    </div>
                  )}
-                 <button onClick={() => { setElements([]); setSelectedId(null); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-400 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete_sweep</span></button>
+                 <button onClick={() => { setElements([]); setSelectedId(null); channelRef.current?.send({ type: 'broadcast', event: 'clear-canvas' }); }} className="size-10 flex items-center justify-center text-slate-500 hover:text-red-500 transition-all"><span className="material-symbols-outlined">delete_sweep</span></button>
               </div>
             </div>
           )}
 
           {/* Media Views Overlay */}
           <div className="absolute bottom-6 right-6 flex flex-col gap-4 z-40 pointer-events-none">
-             <div className="w-56 aspect-video bg-black rounded-2xl border-2 border-primary/30 overflow-hidden relative shadow-2xl pointer-events-auto">
-                {partnerMediaStatus.isVideoOff ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 text-slate-600">
+             <div className="w-60 aspect-video bg-black rounded-2xl border-2 border-primary/40 overflow-hidden relative shadow-2xl pointer-events-auto">
+                <video ref={partnerVideoRef} autoPlay playsInline className={`w-full h-full object-cover transition-opacity duration-500 ${partnerMediaStatus.isVideoOff ? 'opacity-0' : 'opacity-100'}`} />
+                {partnerMediaStatus.isVideoOff && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1d2e] text-slate-500">
                     <span className="material-symbols-outlined !text-4xl animate-pulse">person</span>
-                    <span className="text-[8px] font-black uppercase tracking-widest mt-2">Video Off</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest mt-2">Partner Stream Off</span>
                   </div>
-                ) : (
-                  <video ref={partnerVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
                 )}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[8px] font-black text-white uppercase tracking-widest">{partner?.name || 'Partner'}</div>
-                {partnerMediaStatus.isMuted && <div className="absolute top-2 right-2 bg-red-600 size-6 rounded-full flex items-center justify-center border border-white/20"><span className="material-symbols-outlined text-white !text-xs">mic_off</span></div>}
+                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest">{partner?.name || 'Partner'}</div>
+                {partnerMediaStatus.isMuted && <div className="absolute top-2 right-2 bg-red-600 size-6 rounded-full flex items-center justify-center border border-white/20 shadow-lg"><span className="material-symbols-outlined text-white !text-xs">mic_off</span></div>}
              </div>
-             <div className="w-44 aspect-video bg-black rounded-2xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end">
-                {isVideoOff ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-800 text-slate-600">
-                    <span className="material-symbols-outlined !text-2xl">visibility_off</span>
+             <div className="w-48 aspect-video bg-black rounded-2xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end">
+                <video ref={videoRef} autoPlay muted playsInline className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-500 ${isVideoOff ? 'opacity-0' : 'opacity-100'}`} />
+                {isVideoOff && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#161a2d] text-slate-600">
+                    <span className="material-symbols-outlined !text-2xl">videocam_off</span>
                   </div>
-                ) : (
-                  <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover scale-x-[-1]" />
                 )}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[8px] font-black text-white uppercase tracking-widest">Me</div>
+                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest">Me</div>
              </div>
           </div>
 
-          {/* Centered Controls */}
-          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/90 backdrop-blur-xl border border-white/10 p-3 rounded-2xl shadow-2xl z-40">
-             <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
-             <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
+          {/* Controls Bar */}
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/95 backdrop-blur-2xl border border-white/10 p-4 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.5)] z-40">
+             <button onClick={() => setIsMuted(!isMuted)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span></button>
+             <button onClick={() => setIsVideoOff(!isVideoOff)} className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white shadow-lg' : 'bg-white/5 text-slate-400 hover:text-white'}`}><span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span></button>
              <div className="h-8 w-px bg-white/10 mx-2"></div>
-             <button onClick={() => {/* Screen Share Logic */}} className="px-6 h-12 rounded-xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest bg-white/5 text-slate-400 hover:text-white transition-all"><span className="material-symbols-outlined text-lg">present_to_all</span> Screen Share</button>
+             <button className="px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] bg-white/5 text-slate-400 hover:text-white transition-all"><span className="material-symbols-outlined text-lg">screen_share</span> Share Screen</button>
           </div>
         </div>
 
         <aside className="w-80 h-full border-l border-white/5 flex flex-col bg-[#161a2d]">
-          <div className="flex border-b border-white/5">
-             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'chat' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Discussion</button>
-             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-4 text-[10px] font-black uppercase tracking-widest transition-all ${sidebarTab === 'files' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-white'}`}>Expert Assets</button>
+          <div className="flex border-b border-white/5 p-1">
+             <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'chat' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Discussion</button>
+             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'files' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Expert Files</button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 custom-scrollbar bg-black/10">
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 custom-scrollbar bg-black/20">
              {sidebarTab === 'chat' ? (
                chatMessages.length > 0 ? chatMessages.map((msg, i) => (
-                 <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-1`}>
-                    <div className="flex items-center gap-2 mb-1.5 px-1">
-                      <span className="text-[9px] font-black uppercase text-slate-600">{msg.name}</span>
+                 <div key={i} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                    <div className="flex items-center gap-2 mb-1 px-1">
+                      <span className="text-[10px] font-black uppercase text-slate-500">{msg.name}</span>
                       <span className="text-[8px] font-bold text-slate-700">{msg.timestamp}</span>
                     </div>
-                    <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-white/5 text-slate-300 rounded-tl-none border border-white/5'}`}>
+                    <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-[#1e2235] text-slate-200 rounded-tl-none border border-white/5'}`}>
                       {msg.text}
                     </div>
                  </div>
                )) : (
-                 <div className="h-full flex flex-col items-center justify-center text-slate-700 text-center px-6">
-                    <span className="material-symbols-outlined !text-4xl mb-3 opacity-20">chat_bubble</span>
-                    <span className="text-[10px] font-black uppercase tracking-widest">Connect with your peer through chat</span>
+                 <div className="h-full flex flex-col items-center justify-center text-slate-700 text-center px-10">
+                    <span className="material-symbols-outlined !text-5xl mb-4 opacity-10">forum</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest leading-loose">Exchange ideas and snippets with your peer instantly.</span>
                  </div>
                )
              ) : (
                <div className="space-y-4">
-                  <button className="w-full py-6 border-2 border-dashed border-white/5 rounded-2xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all">
-                    Initialize Asset Transfer
+                  <button className="w-full py-8 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5">
+                    Drop expert assets here
                   </button>
                </div>
              )}
           </div>
           {sidebarTab === 'chat' && (
             <div className="p-4 bg-[#161a2d] border-t border-white/5">
-               <div className="flex gap-2 bg-black/40 p-1.5 rounded-2xl border border-white/5">
+               <div className="flex gap-2 bg-black/30 p-1.5 rounded-2xl border border-white/5">
                  <input value={messageInput} onChange={(e) => setMessageInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} placeholder="Send message..." className="flex-1 bg-transparent px-4 py-2 text-sm text-white outline-none placeholder:text-slate-700" />
-                 <button onClick={sendMessage} className="size-10 bg-primary text-white rounded-xl flex items-center justify-center hover:brightness-110 active:scale-95 transition-all shadow-lg"><span className="material-symbols-outlined !text-lg">send</span></button>
+                 <button onClick={sendMessage} className="size-11 bg-primary text-white rounded-xl flex items-center justify-center hover:brightness-110 active:scale-95 transition-all shadow-glow"><span className="material-symbols-outlined !text-xl">send</span></button>
                </div>
             </div>
           )}
