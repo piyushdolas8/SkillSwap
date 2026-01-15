@@ -3,12 +3,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { ChatMessage, UserProfile, SharedFile } from '../types';
 
-// Defined missing types to resolve "Cannot find name" errors.
-type SessionMode = 'code' | 'draw';
-type SidebarTab = 'chat' | 'files';
-type DrawingTool = 'select' | 'pencil' | 'eraser' | 'text' | 'rect' | 'circle';
-type TransformMode = 'move' | 'rotate' | 'resize' | null;
-
 interface Props {
   matchId: string | null;
   partner: UserProfile | null;
@@ -37,71 +31,50 @@ const MONO_FONT = '"JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, mo
 const SANS_FONT = '"Space Grotesk", sans-serif';
 
 const LANGUAGES = [
-  { id: 'python', name: 'Python', color: '#3776ab', glow: 'rgba(55, 118, 171, 0.3)' },
-  { id: 'javascript', name: 'JavaScript', color: '#f7df1e', glow: 'rgba(247, 223, 30, 0.2)' },
-  { id: 'typescript', name: 'TypeScript', color: '#3178c6', glow: 'rgba(49, 120, 198, 0.3)' },
-  { id: 'cpp', name: 'C++', color: '#00599c', glow: 'rgba(0, 89, 156, 0.3)' },
-  { id: 'html', name: 'HTML/CSS', color: '#e34f26', glow: 'rgba(227, 79, 38, 0.3)' }
+  { id: 'python', name: 'Python' },
+  { id: 'javascript', name: 'JavaScript' },
+  { id: 'typescript', name: 'TypeScript' },
+  { id: 'cpp', name: 'C++' },
+  { id: 'html', name: 'HTML/CSS' }
 ];
 
 const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
-  'python': `# Python Expert Session\nimport math\n\ndef calculate_radius(area):\n    """Calculate radius from area."""\n    return math.sqrt(area / math.pi)\n\n# Let's test this function\nprint(f"Radius: {calculate_radius(100):.2f}")`,
-  'javascript': `// JavaScript Masterclass\nconst peerExchange = {\n  status: "active",\n  participants: ["Expert", "Learner"],\n  async initiate() {\n    console.log("Syncing peer nodes...");\n    return true;\n  }\n};\n\npeerExchange.initiate();`,
-  'typescript': `interface Peer {\n  id: string;\n  skill: string;\n  xp: number;\n}\n\nfunction mentor(peer: Peer): string {\n  return \`Mastering \${peer.skill} at level \${peer.xp}\`;\n}\n\nconst user = { id: "p01", skill: "TS", xp: 99 };`,
-  'cpp': `#include <iostream>\nusing namespace std;\n\nint main() {\n    // Optimal peer-to-peer logic\n    cout << "SkillSwap C++ Protocol v2.4" << endl;\n    return 0;\n}`,
-  'html': `<!-- Advanced Component Structure -->\n<div class="skill-card">\n  <h2>Mastering CSS Grid</h2>\n  <p>Trade what you know.</p>\n</div>\n\n<style>\n  .skill-card {\n    display: grid;\n    place-items: center;\n    color: #0d33f2;\n  }\n</style>`
+  'python': `# SkillSwap Python Session\n\ndef main():\n    print("Hello, Peer!")\n\nif __name__ == "__main__":\n    main()`,
+  'javascript': `// SkillSwap JS Session\nconst greet = () => {\n  console.log("Collaborative coding is fun!");\n};\ngreet();`,
+  'typescript': `interface User {\n  id: string;\n  skill: string;\n}\n\nconst user: User = {\n  id: "123",\n  skill: "Expert"\n};`,
+  'cpp': `#include <iostream>\n\nint main() {\n    std::cout << "Learning together!" << std::endl;\n    return 0;\n}`,
+  'html': `<!-- SkillSwap Sandbox -->\n<div class="container">\n  <h1>Peer Learning</h1>\n  <p>Start trading skills today.</p>\n</div>\n\n<style>\n  .container { color: #0d33f2; font-family: sans-serif; }\n</style>`
 };
 
 const highlightCode = (code: string, language: string) => {
   let html = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  
   const patterns: Record<string, { regex: RegExp; class: string }[]> = {
     common: [
-      { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, class: 'text-[#ce9178]' }, // Strings
-      { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' }, // Numbers
+      { regex: /(".*?"|'.*?'|`.*?`)/g, class: 'text-[#ce9178]' },
+      { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' },
     ],
     javascript: [
-      { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' }, // Comments
-      { regex: /\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|new|this|await|async|type|interface|enum|default)\b/g, class: 'text-[#569cd6]' }, // Keywords
-      { regex: /\b(console|window|document|Math|Object|Array|String|Number|Boolean|JSON)\b/g, class: 'text-[#4ec9b0]' }, // Built-ins
-      { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' }, // Functions
-    ],
-    python: [
-      { regex: /(#.*$)/gm, class: 'text-[#6a9955] italic' }, // Comments
-      { regex: /(""".*?"""|'''.*?''')/gs, class: 'text-[#6a9955] italic' }, // Docstrings
-      { regex: /\b(def|return|if|elif|else|for|while|import|from|class|as|with|try|except|finally|pass|in|is|not|and|or|lambda|None|True|False|async|await)\b/g, class: 'text-[#569cd6]' }, // Keywords
-      { regex: /\b(print|range|len|enumerate|zip|dict|list|set|str|int|float|open)\b/g, class: 'text-[#4ec9b0]' }, // Built-ins
-      { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' }, // Functions
-    ],
-    cpp: [
       { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' },
-      { regex: /#\s*\b(include|define|if|else|endif|pragma)\b/g, class: 'text-[#c586c0]' }, // Preprocessor
-      { regex: /\b(int|float|double|char|bool|void|class|struct|public|private|protected|template|typename|operator|new|delete|return|if|else|for|while|do|switch|case|break|continue|using|namespace|std|cout|cin|endl)\b/g, class: 'text-[#569cd6]' },
+      { regex: /\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|new|this|await|async|type|interface|enum)\b/g, class: 'text-[#569cd6]' },
       { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
     ],
-    html: [
-      { regex: /(&lt;!--.*?--&gt;)/gs, class: 'text-[#6a9955] italic' }, // Comments
-      { regex: /(&lt;\/?[a-z1-6]+|&gt;)/gi, class: 'text-[#808080]' }, // Tags
-      { regex: /\b(class|id|style|src|href|alt|type|value|name|onclick|rel|target)\b/g, class: 'text-[#9cdcfe]' }, // Attributes
+    python: [
+      { regex: /(#.*$)/gm, class: 'text-[#6a9955] italic' },
+      { regex: /\b(def|return|if|elif|else|for|while|import|from|class|as|with|try|except|finally|pass|in|is|not|and|or|lambda|None|True|False)\b/g, class: 'text-[#569cd6]' },
+      { regex: /\b(print|range|len|enumerate|zip)\b/g, class: 'text-[#4ec9b0]' },
     ]
   };
-
   const langPatterns = patterns[language] || patterns.javascript;
-  const allPatterns = [...langPatterns, ...patterns.common];
-  
-  allPatterns.forEach(p => {
+  [...langPatterns, ...patterns.common].forEach(p => {
     html = html.replace(p.regex, (match) => `<span class="${p.class}">${match}</span>`);
   });
-
-  // Add line numbers
-  const lines = html.split('\n');
-  return lines.map((line, i) => `
-    <div class="flex">
-      <span class="w-10 text-right pr-4 text-slate-700 select-none text-[10px] font-mono leading-relaxed mt-1">${i + 1}</span>
-      <span class="flex-1">${line || ' '}</span>
-    </div>
-  `).join('');
+  return html;
 };
+
+type SessionMode = 'code' | 'draw';
+type SidebarTab = 'chat' | 'files';
+type DrawingTool = 'select' | 'pencil' | 'text' | 'rect' | 'circle' | 'eraser';
+type TransformMode = 'move' | 'resize' | 'rotate' | null;
 
 const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEnd }) => {
   const [mode, setMode] = useState<SessionMode>('code');
@@ -141,22 +114,21 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const streamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
 
-  // --- MEDIA HANDLER (PREVENTS BLACK SCREEN) ---
+  // --- IMPROVED MEDIA HANDLER ---
   useEffect(() => {
-    let mounted = true;
+    let active = true;
     const startMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        if (!mounted) {
+        if (!active) {
           stream.getTracks().forEach(t => t.stop());
           return;
         }
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play().catch(e => console.warn("Video play error:", e));
-          };
+          // Ensure play starts even if previously interrupted
+          videoRef.current.play().catch(e => console.warn("Video play error:", e));
         }
       } catch (err) {
         console.error("Media error:", err);
@@ -164,12 +136,12 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     };
     startMedia();
     return () => {
-      mounted = false;
+      active = false;
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
   }, []);
 
-  // Sync track state (fixed black screen by using enabled property)
+  // Sync track state (fixed black screen issue by ensuring track enabled property is correctly updated)
   useEffect(() => {
     if (streamRef.current) {
       const videoTracks = streamRef.current.getVideoTracks();
@@ -178,8 +150,11 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       videoTracks.forEach(track => { track.enabled = !isVideoOff; });
       audioTracks.forEach(track => { track.enabled = !isMuted; });
 
+      // If video is turned back on, force the video element to try and play again
       if (!isVideoOff && videoRef.current) {
-        videoRef.current.play().catch(() => {});
+        if (videoRef.current.paused) {
+          videoRef.current.play().catch(() => {});
+        }
       }
 
       channelRef.current?.send({ 
@@ -196,7 +171,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const channel = supabase.channel(`session:${matchId}`, { config: { broadcast: { self: false } } });
     channel
       .on('broadcast', { event: 'code-update' }, (p) => { setCode(p.payload.code); if (p.payload.lang) setSelectedLang(p.payload.lang); })
-      .on('broadcast', { event: 'chat-message' }, (p) => setChatMessages(prev => [...prev, p.payload]))
+      .on('broadcast', { event: 'chat-message' }, (p) => {
+        setChatMessages(prev => [...prev, p.payload]);
+      })
       .on('broadcast', { event: 'element-added' }, (p) => setElements(prev => [...prev, p.payload.element]))
       .on('broadcast', { event: 'element-updated' }, (p) => setElements(prev => prev.map(el => el.id === p.payload.element.id ? p.payload.element : el)))
       .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
@@ -205,13 +182,14 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         channelRef.current = channel;
+        // Send initial media status
         channel.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff } });
       }
     });
     return () => { supabase.removeChannel(channel); };
   }, [matchId, isMuted, isVideoOff]);
 
-  // --- CANVAS RENDERING (ANIMATED & SMOOTH) ---
+  // --- CANVAS RENDERING ---
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -296,7 +274,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     return () => cancelAnimationFrame(frame);
   }, [renderCanvas]);
 
-  // --- INTERACTION ---
+  // --- WHITEBOARD INTERACTION LOGIC ---
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -310,6 +288,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         if (el) {
           const centerX = (el.bbox.minX + el.bbox.maxX) / 2 + el.translateX;
           const centerY = (el.bbox.minY + el.bbox.maxY) / 2 + el.translateY;
+          
           if (Math.hypot(x - centerX, y - (el.bbox.minY - 24 + el.translateY)) < 24) {
             transformModeRef.current = 'rotate';
             initialTransformRef.current = { ...el };
@@ -395,6 +374,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
 
     if (!isInteractingRef.current) return;
+
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       currentStrokeRef.current.push({ x, y });
     }
@@ -498,86 +478,48 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     setMessageInput('');
   };
 
-  const currentTheme = LANGUAGES.find(l => l.id === selectedLang) || LANGUAGES[0];
-
   return (
-    <div className="flex flex-col h-screen w-full bg-[#0a0b10] overflow-hidden font-display">
+    <div className="flex flex-col h-screen w-full bg-[#0d0e14] overflow-hidden font-display">
       <header className="flex items-center justify-between border-b border-white/5 px-6 py-3 bg-[#161a2d] z-50">
         <div className="flex items-center gap-6">
           <div className="size-8 text-primary">
             <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path clipRule="evenodd" d="M24 0.757355L47.2426 24L24 47.2426L0.757355 24L24 0.757355ZM21 35.7574V12.2426L9.24264 24L21 35.7574Z" fill="currentColor" fillRule="evenodd"></path></svg>
           </div>
-          <div className="flex bg-black/40 rounded-xl p-1 border border-white/5 shadow-lg">
-            <button onClick={() => setMode('code')} className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'code' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Code Editor</button>
+          <div className="flex bg-black/30 rounded-xl p-1 border border-white/5">
+            <button onClick={() => setMode('code')} className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'code' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>IDE Mode</button>
             <button onClick={() => setMode('draw')} className={`px-6 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${mode === 'draw' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Whiteboard</button>
           </div>
         </div>
         <div className="flex items-center gap-6">
-           <div className="flex items-center gap-3 px-4 py-2 bg-primary/5 rounded-xl border border-primary/20">
-              <span className="size-2 rounded-full bg-primary animate-pulse shadow-[0_0_8px_#0d33f2]"></span>
-              <span className="text-[10px] font-black text-primary uppercase tracking-widest">Real-time Node</span>
+           <div className="flex items-center gap-3 px-4 py-2 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
+              <span className="size-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Live Exchange Active</span>
            </div>
-           <button onClick={onEnd} className="bg-red-600/10 text-red-500 border border-red-500/20 text-[10px] font-black h-10 px-6 rounded-xl hover:bg-red-600 hover:text-white transition-all uppercase tracking-widest shadow-lg">Disconnect</button>
+           <button onClick={onEnd} className="bg-red-600 text-white text-[10px] font-black h-10 px-6 rounded-xl hover:brightness-110 transition-all uppercase tracking-widest shadow-lg">Terminate Session</button>
         </div>
       </header>
 
       <main className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col relative bg-[#080910]">
           {mode === 'code' ? (
-            <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-500">
-              <div className="h-10 flex items-center justify-between px-6 bg-[#161a2d] border-b border-white/5 shadow-xl z-20">
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <span className="size-2 rounded-full" style={{ backgroundColor: currentTheme.color }}></span>
-                    <select 
-                      value={selectedLang} 
-                      onChange={(e) => {
-                        const newLang = e.target.value;
-                        setSelectedLang(newLang);
-                        setCode(DEFAULT_CODE_TEMPLATES[newLang] || "");
-                      }} 
-                      className="bg-transparent text-slate-400 text-[11px] font-black uppercase tracking-widest border-none outline-none cursor-pointer hover:text-white transition-colors"
-                    >
-                      {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                   <button onClick={() => navigator.clipboard.writeText(code)} className="size-8 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10 transition-all"><span className="material-symbols-outlined !text-sm">content_copy</span></button>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="h-10 flex items-center justify-between px-6 bg-[#161a2d] border-b border-white/5">
+                <div className="flex items-center gap-4">
+                  <select value={selectedLang} onChange={(e) => setSelectedLang(e.target.value)} className="bg-transparent text-slate-400 text-[11px] font-bold border-none outline-none cursor-pointer hover:text-white transition-colors">
+                    {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.id.toUpperCase()}</option>)}
+                  </select>
                 </div>
               </div>
-              <div className="flex-1 relative font-mono text-[13px] overflow-hidden group">
-                 <div 
-                   className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20"
-                   style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }}
-                 />
-                 <pre 
-                   ref={preRef} 
-                   className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-relaxed overflow-hidden text-slate-300 transition-colors duration-500" 
-                   dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} 
-                 />
-                 <textarea 
-                   ref={editorRef} 
-                   spellCheck={false} 
-                   value={code} 
-                   onScroll={() => { 
-                     if (preRef.current && editorRef.current) { 
-                       preRef.current.scrollTop = editorRef.current.scrollTop; 
-                       preRef.current.scrollLeft = editorRef.current.scrollLeft; 
-                     } 
-                   }} 
-                   onChange={(e) => { 
-                     setCode(e.target.value); 
-                     channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
-                   }} 
-                   className="absolute inset-0 p-6 pt-[25px] pl-[56px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-relaxed border-none selection:bg-primary/30" 
-                 />
+              <div className="flex-1 relative font-mono text-sm">
+                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-relaxed overflow-hidden" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) + '\n' }} />
+                 <textarea ref={editorRef} spellCheck={false} value={code} onScroll={() => { if (preRef.current && editorRef.current) { preRef.current.scrollTop = editorRef.current.scrollTop; preRef.current.scrollLeft = editorRef.current.scrollLeft; } }} onChange={(e) => { setCode(e.target.value); channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); }} className="absolute inset-0 p-6 bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-relaxed" />
               </div>
             </div>
           ) : (
-            <div className="flex-1 relative bg-white overflow-hidden animate-in fade-in duration-500">
+            <div className="flex-1 relative bg-white overflow-hidden">
               <canvas ref={canvasRef} width={2500} height={2500} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`w-full h-full ${drawingTool === 'select' ? 'cursor-default' : 'cursor-crosshair'}`} />
               
+              {/* Native-feeling text input overlay */}
               {activeTextInput && (
                 <textarea 
                   ref={textInputRef} 
@@ -586,7 +528,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                   onChange={(e) => setCurrentTextValue(e.target.value)} 
                   onBlur={finalizeText} 
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finalizeText(); } }}
-                  className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-2xl backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" 
+                  className="absolute bg-white border-2 border-primary outline-none p-3 rounded-xl text-2xl shadow-[0_10px_40px_rgba(0,0,0,0.3)] backdrop-blur-md transition-all placeholder:text-slate-400 z-50 text-slate-900" 
                   placeholder="Type here..."
                   style={{ left: activeTextInput.x, top: activeTextInput.y, fontFamily: drawFontFamily, fontSize: drawFontSize, minWidth: '220px', maxWidth: '400px' }} 
                 />
@@ -611,17 +553,18 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
             </div>
           )}
 
-          {/* Media Views Overlay (FIXED FOR NO BLACK SCREEN) */}
+          {/* Media Views Overlay */}
           <div className="absolute bottom-6 right-6 flex flex-col gap-4 z-40 pointer-events-none">
-             <div className="w-64 aspect-video bg-black rounded-3xl border-2 border-primary/30 overflow-hidden relative shadow-2xl pointer-events-auto">
-                <video ref={partnerVideoRef} autoPlay playsInline className={`w-full h-full object-cover transition-opacity duration-700 ${partnerMediaStatus.isVideoOff ? 'opacity-0' : 'opacity-100'}`} />
+             <div className="w-64 aspect-video bg-black rounded-2xl border-2 border-primary/40 overflow-hidden relative shadow-2xl pointer-events-auto">
+                {/* Partner Video Mock - In a real app this would be tied to an RTCPeerConnection stream */}
+                <video ref={partnerVideoRef} autoPlay playsInline className={`w-full h-full object-cover transition-opacity duration-500 ${partnerMediaStatus.isVideoOff ? 'opacity-0' : 'opacity-100'}`} />
                 {partnerMediaStatus.isVideoOff && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1d2e] text-slate-500">
                     <span className="material-symbols-outlined !text-4xl animate-pulse">person</span>
-                    <span className="text-[9px] font-black uppercase tracking-widest mt-3">Node Offline</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest mt-2">Partner Stream Off</span>
                   </div>
                 )}
-                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/70 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">
+                <div className="absolute bottom-3 left-3 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg text-[10px] font-black text-white uppercase tracking-widest border border-white/10">
                    {partner?.name || 'Partner'}
                 </div>
                 {partnerMediaStatus.isMuted && (
@@ -631,7 +574,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                 )}
              </div>
              
-             <div className="w-48 aspect-video bg-black rounded-3xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end group">
+             <div className="w-48 aspect-video bg-black rounded-2xl border-2 border-white/10 overflow-hidden relative shadow-2xl pointer-events-auto self-end">
                 <video 
                   ref={videoRef} 
                   autoPlay 
@@ -642,40 +585,49 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                 {isVideoOff && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#161a2d] text-slate-600">
                     <span className="material-symbols-outlined !text-3xl">videocam_off</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest mt-2">Camera Off</span>
                   </div>
                 )}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Me</div>
+                <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded text-[9px] font-black text-white uppercase tracking-widest">Me</div>
+                {isMuted && (
+                  <div className="absolute top-2 right-2 bg-red-600 size-5 rounded-full flex items-center justify-center border border-white/10">
+                    <span className="material-symbols-outlined text-white !text-[10px]">mic_off</span>
+                  </div>
+                )}
              </div>
           </div>
 
           {/* Controls Bar */}
-          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/95 backdrop-blur-2xl border border-white/10 p-4 rounded-[2.5rem] shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-40 transition-all hover:scale-105">
+          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-[#161a2d]/95 backdrop-blur-2xl border border-white/10 p-4 rounded-[2.5rem] shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-40">
              <button 
                onClick={() => setIsMuted(!isMuted)} 
                className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isMuted ? 'bg-red-600 text-white shadow-[0_0_20px_rgba(220,38,38,0.4)]' : 'bg-white/5 text-slate-400 hover:text-white'}`}
+               title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
              >
                <span className="material-symbols-outlined">{isMuted ? 'mic_off' : 'mic'}</span>
              </button>
              <button 
                onClick={() => setIsVideoOff(!isVideoOff)} 
                className={`size-12 rounded-2xl flex items-center justify-center transition-all ${isVideoOff ? 'bg-red-600 text-white shadow-[0_0_20px_rgba(220,38,38,0.4)]' : 'bg-white/5 text-slate-400 hover:text-white'}`}
+               title={isVideoOff ? "Turn Camera On" : "Turn Camera Off"}
              >
                <span className="material-symbols-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span>
              </button>
              <div className="h-8 w-px bg-white/10 mx-2"></div>
              <button 
                 className="px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] bg-white/5 text-slate-400 hover:text-white transition-all active:scale-95"
+                title="Screen Sharing coming soon"
              >
                 <span className="material-symbols-outlined text-lg">screen_share</span> 
-                Mirror Node
+                Share Screen
              </button>
           </div>
         </div>
 
-        <aside className="w-80 h-full border-l border-white/5 flex flex-col bg-[#161a2d] shadow-2xl z-30">
-          <div className="flex border-b border-white/5 p-1 bg-black/20">
+        <aside className="w-80 h-full border-l border-white/5 flex flex-col bg-[#161a2d]">
+          <div className="flex border-b border-white/5 p-1">
              <button onClick={() => setSidebarTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'chat' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Discussion</button>
-             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'files' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Assets</button>
+             <button onClick={() => setSidebarTab('files')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-xl ${sidebarTab === 'files' ? 'bg-primary text-white shadow-glow' : 'text-slate-500 hover:text-white'}`}>Expert Files</button>
           </div>
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-5 custom-scrollbar bg-black/20">
              {sidebarTab === 'chat' ? (
@@ -685,32 +637,32 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                       <span className="text-[10px] font-black uppercase text-slate-500">{msg.name}</span>
                       <span className="text-[8px] font-bold text-slate-700">{msg.timestamp}</span>
                     </div>
-                    <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-[13px] leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-[#1e2235] text-slate-200 rounded-tl-none border border-white/5'}`}>
+                    <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.sender === 'user' ? 'bg-primary text-white rounded-tr-none shadow-lg' : 'bg-[#1e2235] text-slate-200 rounded-tl-none border border-white/5'}`}>
                       {msg.text}
                     </div>
                  </div>
                )) : (
                  <div className="h-full flex flex-col items-center justify-center text-slate-700 text-center px-10">
                     <span className="material-symbols-outlined !text-5xl mb-4 opacity-10">forum</span>
-                    <span className="text-[10px] font-black uppercase tracking-widest leading-loose">Exchange ideas with your peer instantly.</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest leading-loose">Exchange ideas and snippets with your peer instantly.</span>
                  </div>
                )
              ) : (
                <div className="space-y-4">
-                  <button className="w-full py-10 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5">
-                    Sync Project Assets
+                  <button className="w-full py-8 border-2 border-dashed border-white/5 rounded-3xl text-slate-600 text-[10px] font-black uppercase tracking-widest hover:border-primary hover:text-white transition-all bg-white/5">
+                    Drop expert assets here
                   </button>
                </div>
              )}
           </div>
           {sidebarTab === 'chat' && (
             <div className="p-4 bg-[#161a2d] border-t border-white/5">
-               <div className="flex gap-2 bg-black/40 p-1.5 rounded-2xl border border-white/5 focus-within:border-primary/50 transition-colors">
+               <div className="flex gap-2 bg-black/30 p-1.5 rounded-2xl border border-white/5">
                  <input 
                     value={messageInput} 
                     onChange={(e) => setMessageInput(e.target.value)} 
                     onKeyDown={(e) => e.key === 'Enter' && sendMessage()} 
-                    placeholder="Message peer..." 
+                    placeholder="Send message..." 
                     className="flex-1 bg-transparent px-4 py-2 text-sm text-white outline-none placeholder:text-slate-700" 
                  />
                  <button onClick={sendMessage} className="size-11 bg-primary text-white rounded-xl flex items-center justify-center hover:brightness-110 active:scale-95 transition-all shadow-glow"><span className="material-symbols-outlined !text-xl">send</span></button>
