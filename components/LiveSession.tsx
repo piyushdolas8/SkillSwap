@@ -105,7 +105,6 @@ const highlightCode = (code: string, language: string) => {
   }
 
   const lines = finalHtml.split('\n');
-  // Fixed "spaces in between" by using a single-line HTML generation and removing template newlines
   return lines.map((line, i) => `<div class="flex h-[21px] leading-[21px]"><span class="w-[48px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span><span class="flex-1 whitespace-pre">${line || ' '}</span></div>`).join('');
 };
 
@@ -346,6 +345,16 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     return () => { supabase.removeChannel(channel); };
   }, [matchId, isMuted, isVideoOff, isSharingScreen, initWebRTC]);
 
+  // Utility to get scaled canvas coordinates
+  const getCanvasCoords = (e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return { x, y };
+  };
+
   const renderCanvasElements = (ctx: CanvasRenderingContext2D, items: CanvasElement[]) => {
     items.forEach(el => {
       ctx.save();
@@ -412,10 +421,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   useEffect(() => { renderCanvas(); }, [renderCanvas]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const { x, y } = getCanvasCoords(e);
     startPosRef.current = { x, y };
     lastMousePosRef.current = { x, y };
     
@@ -454,10 +460,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const { x, y } = getCanvasCoords(e);
     
     if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 0.5) return;
     lastMousePosRef.current = { x, y };
@@ -505,9 +508,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       if (updated) channelRef.current?.send({ type: 'broadcast', event: 'element-updated', payload: { element: updated } });
       isInteractingRef.current = false; transformModeRef.current = null; return;
     }
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+    const { x, y } = getCanvasCoords(e);
     let newEl: CanvasElement | null = null;
     if (drawingTool === 'pencil' || drawingTool === 'eraser') {
       const pts = [...currentStrokeRef.current];
@@ -592,10 +593,13 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                    <button onClick={() => navigator.clipboard.writeText(code)} className="size-8 rounded-lg bg-white/5 border border-white/5 flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10 transition-all"><span className="material-symbols-outlined !text-sm">content_copy</span></button>
                 </div>
               </div>
-              <div className="flex-1 relative font-mono text-[13px] overflow-hidden group">
+              <div className="flex-1 relative overflow-hidden group">
                  <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }} />
-                 {/* Fixed: Matched pre and textarea CSS to remove "extra spaces" bug */}
-                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500 font-mono text-[13px]" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
+                 <pre ref={preRef} 
+                   className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500 font-mono text-[13px]" 
+                   style={{ fontFamily: MONO_FONT }}
+                   dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} 
+                 />
                  <textarea 
                    ref={editorRef} 
                    spellCheck={false} 
@@ -610,8 +614,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                      setCode(e.target.value); 
                      channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
                    }} 
-                   // Fixed: Matches the line-height and padding of the highlight wrapper perfectly
-                   className="absolute inset-0 p-6 pl-[64px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10 font-mono text-[13px]" 
+                   // Fixed Padding: pre p-6 (24px) + line number span (48px) = 72px left padding
+                   className="absolute inset-0 p-6 pl-[72px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10 font-mono text-[13px]" 
+                   style={{ fontFamily: MONO_FONT }}
                  />
               </div>
             </div>
