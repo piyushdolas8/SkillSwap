@@ -52,12 +52,10 @@ const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
 };
 
 const highlightCode = (code: string, language: string) => {
-  // 1. Escape HTML entities first
   let escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   
   const rules: { regex: RegExp; class: string }[] = [];
   
-  // Common patterns
   const common = [
     { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, class: 'text-[#ce9178]' },
     { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' },
@@ -90,12 +88,10 @@ const highlightCode = (code: string, language: string) => {
 
   rules.push(...(langRules[language] || langRules.javascript), ...common);
 
-  // 2. Tokenize to prevent nested replacements
-  // We replace matches with placeholders, then swap placeholders for spans
   const tokens: string[] = [];
   let tempHtml = escaped;
 
-  rules.forEach((rule, idx) => {
+  rules.forEach((rule) => {
     tempHtml = tempHtml.replace(rule.regex, (match) => {
       const token = `__TOKEN_${tokens.length}__`;
       tokens.push(`<span class="${rule.class}">${match}</span>`);
@@ -103,19 +99,14 @@ const highlightCode = (code: string, language: string) => {
     });
   });
 
-  // Re-insert tokens
   let finalHtml = tempHtml;
   for (let i = 0; i < tokens.length; i++) {
     finalHtml = finalHtml.replace(`__TOKEN_${i}__`, tokens[i]);
   }
 
   const lines = finalHtml.split('\n');
-  return lines.map((line, i) => `
-    <div class="flex h-[21px] leading-[21px]">
-      <span class="w-[40px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span>
-      <span class="flex-1">${line || ' '}</span>
-    </div>
-  `).join('');
+  // Fixed "spaces in between" by using a single-line HTML generation and removing template newlines
+  return lines.map((line, i) => `<div class="flex h-[21px] leading-[21px]"><span class="w-[48px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span><span class="flex-1 whitespace-pre">${line || ' '}</span></div>`).join('');
 };
 
 const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEnd }) => {
@@ -163,11 +154,9 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const screenStreamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
 
-  // WebRTC Refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
 
-  // Initialize WebRTC Peer Connection
   const initWebRTC = useCallback(() => {
     if (pcRef.current) return pcRef.current;
     
@@ -203,7 +192,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     return pc;
   }, [isSharingScreen]);
 
-  // --- MEDIA HANDLER ---
   useEffect(() => {
     let mounted = true;
     const startMedia = async () => {
@@ -256,7 +244,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
   }, [isVideoOff, isMuted, isSharingScreen]);
 
-  // --- SCREEN SHARE IMPLEMENTATION ---
   const handleToggleScreenShare = async () => {
     if (isSharingScreen) {
       screenStreamRef.current?.getTracks().forEach(track => track.stop());
@@ -295,7 +282,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
   };
 
-  // --- FILE ASSETS HANDLING ---
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setIsUploading(true);
@@ -317,7 +303,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     }
   };
 
-  // --- NETWORK SYNC ---
   useEffect(() => {
     if (!matchId) return;
     const channel = supabase.channel(`session:${matchId}`, { config: { broadcast: { self: false } } });
@@ -474,7 +459,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Smooth movement threshold
     if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 0.5) return;
     lastMousePosRef.current = { x, y };
 
@@ -610,7 +594,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               </div>
               <div className="flex-1 relative font-mono text-[13px] overflow-hidden group">
                  <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }} />
-                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
+                 {/* Fixed: Matched pre and textarea CSS to remove "extra spaces" bug */}
+                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500 font-mono text-[13px]" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
                  <textarea 
                    ref={editorRef} 
                    spellCheck={false} 
@@ -625,7 +610,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                      setCode(e.target.value); 
                      channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
                    }} 
-                   className="absolute inset-0 p-6 pt-6 pl-[56px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10" 
+                   // Fixed: Matches the line-height and padding of the highlight wrapper perfectly
+                   className="absolute inset-0 p-6 pl-[64px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10 font-mono text-[13px]" 
                  />
               </div>
             </div>
