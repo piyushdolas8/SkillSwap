@@ -36,11 +36,11 @@ const MONO_FONT = '"JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, mo
 const SANS_FONT = '"Space Grotesk", sans-serif';
 
 const LANGUAGES = [
-  { id: 'python', name: 'Python', color: '#3776ab', glow: 'rgba(55, 118, 171, 0.3)' },
-  { id: 'javascript', name: 'JavaScript', color: '#f7df1e', glow: 'rgba(247, 223, 30, 0.2)' },
-  { id: 'typescript', name: 'TypeScript', color: '#3178c6', glow: 'rgba(49, 120, 198, 0.3)' },
-  { id: 'cpp', name: 'C++', color: '#00599c', glow: 'rgba(0, 89, 156, 0.3)' },
-  { id: 'html', name: 'HTML/CSS', color: '#e34f26', glow: 'rgba(227, 79, 38, 0.3)' }
+  { id: 'python', name: 'Python', color: '#3776ab', icon: 'terminal', glow: 'rgba(55, 118, 171, 0.3)' },
+  { id: 'javascript', name: 'JavaScript', color: '#f7df1e', icon: 'javascript', glow: 'rgba(247, 223, 30, 0.2)' },
+  { id: 'typescript', name: 'TypeScript', color: '#3178c6', icon: 'integration_instructions', glow: 'rgba(49, 120, 198, 0.3)' },
+  { id: 'cpp', name: 'C++', color: '#00599c', icon: 'settings_input_component', glow: 'rgba(0, 89, 156, 0.3)' },
+  { id: 'html', name: 'HTML/CSS', color: '#e34f26', icon: 'html', glow: 'rgba(227, 79, 38, 0.3)' }
 ];
 
 const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
@@ -52,13 +52,18 @@ const DEFAULT_CODE_TEMPLATES: Record<string, string> = {
 };
 
 const highlightCode = (code: string, language: string) => {
-  let html = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 1. Escape HTML entities first
+  let escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   
-  const patterns: Record<string, { regex: RegExp; class: string }[]> = {
-    common: [
-      { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, class: 'text-[#ce9178]' },
-      { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' },
-    ],
+  const rules: { regex: RegExp; class: string }[] = [];
+  
+  // Common patterns
+  const common = [
+    { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, class: 'text-[#ce9178]' },
+    { regex: /\b(\d+)\b/g, class: 'text-[#b5cea8]' },
+  ];
+
+  const langRules: Record<string, { regex: RegExp; class: string }[]> = {
     javascript: [
       { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' },
       { regex: /\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|new|this|await|async|type|interface|enum|default)\b/g, class: 'text-[#569cd6]' },
@@ -70,13 +75,11 @@ const highlightCode = (code: string, language: string) => {
       { regex: /(""".*?"""|'''.*?''')/gs, class: 'text-[#6a9955] italic' },
       { regex: /\b(def|return|if|elif|else|for|while|import|from|class|as|with|try|except|finally|pass|in|is|not|and|or|lambda|None|True|False|async|await)\b/g, class: 'text-[#569cd6]' },
       { regex: /\b(print|range|len|enumerate|zip|dict|list|set|str|int|float|open)\b/g, class: 'text-[#4ec9b0]' },
-      { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
     ],
     cpp: [
       { regex: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm, class: 'text-[#6a9955] italic' },
       { regex: /#\s*\b(include|define|if|else|endif|pragma)\b/g, class: 'text-[#c586c0]' },
       { regex: /\b(int|float|double|char|bool|void|class|struct|public|private|protected|template|typename|operator|new|delete|return|if|else|for|while|do|switch|case|break|continue|using|namespace|std|cout|cin|endl)\b/g, class: 'text-[#569cd6]' },
-      { regex: /\b([a-zA-Z_]\w*)(?=\s*\()/g, class: 'text-[#dcdcaa]' },
     ],
     html: [
       { regex: /(&lt;!--.*?--&gt;)/gs, class: 'text-[#6a9955] italic' },
@@ -85,17 +88,31 @@ const highlightCode = (code: string, language: string) => {
     ]
   };
 
-  const langPatterns = patterns[language] || patterns.javascript;
-  const allPatterns = [...langPatterns, ...patterns.common];
-  
-  allPatterns.forEach(p => {
-    html = html.replace(p.regex, (match) => `<span class="${p.class}">${match}</span>`);
+  rules.push(...(langRules[language] || langRules.javascript), ...common);
+
+  // 2. Tokenize to prevent nested replacements
+  // We replace matches with placeholders, then swap placeholders for spans
+  const tokens: string[] = [];
+  let tempHtml = escaped;
+
+  rules.forEach((rule, idx) => {
+    tempHtml = tempHtml.replace(rule.regex, (match) => {
+      const token = `__TOKEN_${tokens.length}__`;
+      tokens.push(`<span class="${rule.class}">${match}</span>`);
+      return token;
+    });
   });
 
-  const lines = html.split('\n');
+  // Re-insert tokens
+  let finalHtml = tempHtml;
+  for (let i = 0; i < tokens.length; i++) {
+    finalHtml = finalHtml.replace(`__TOKEN_${i}__`, tokens[i]);
+  }
+
+  const lines = finalHtml.split('\n');
   return lines.map((line, i) => `
-    <div class="flex">
-      <span class="w-10 text-right pr-4 text-slate-700 select-none text-[10px] font-mono leading-relaxed mt-1">${i + 1}</span>
+    <div class="flex h-[21px] leading-[21px]">
+      <span class="w-[40px] text-right pr-4 text-slate-700 select-none text-[11px] font-mono">${i + 1}</span>
       <span class="flex-1">${line || ' '}</span>
     </div>
   `).join('');
@@ -580,8 +597,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
             <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-500">
               <div className="h-10 flex items-center justify-between px-6 bg-[#161a2d] border-b border-white/5 shadow-xl z-20">
                 <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <span className="size-2 rounded-full" style={{ backgroundColor: currentTheme.color }}></span>
+                  <div className="flex items-center gap-3">
+                    <span className="material-symbols-outlined !text-sm" style={{ color: currentTheme.color }}>{currentTheme.icon}</span>
                     <select value={selectedLang} onChange={(e) => { const newLang = e.target.value; setSelectedLang(newLang); setCode(DEFAULT_CODE_TEMPLATES[newLang] || ""); }} className="bg-transparent text-slate-400 text-[11px] font-black uppercase tracking-widest border-none outline-none cursor-pointer hover:text-white transition-colors">
                       {LANGUAGES.map(lang => <option key={lang.id} value={lang.id} className="bg-[#161a2d]">{lang.name}</option>)}
                     </select>
@@ -593,7 +610,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               </div>
               <div className="flex-1 relative font-mono text-[13px] overflow-hidden group">
                  <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }} />
-                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-relaxed overflow-hidden text-slate-300 transition-colors duration-500" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
+                 <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-[21px] overflow-hidden text-slate-300 transition-colors duration-500" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
                  <textarea 
                    ref={editorRef} 
                    spellCheck={false} 
@@ -608,7 +625,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
                      setCode(e.target.value); 
                      channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
                    }} 
-                   className="absolute inset-0 p-6 pt-6 pl-[80px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-relaxed border-none selection:bg-primary/30 z-10" 
+                   className="absolute inset-0 p-6 pt-6 pl-[56px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-[21px] border-none selection:bg-primary/30 z-10" 
                  />
               </div>
             </div>
@@ -672,7 +689,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
              <div className="h-8 w-px bg-white/10 mx-2" />
              <button onClick={handleToggleScreenShare} className={`px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 ${isSharingScreen ? 'bg-primary text-white shadow-glow' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
                 <span className="material-symbols-outlined text-lg">{isSharingScreen ? 'stop_screen_share' : 'screen_share'}</span> 
-                {isSharingScreen ? 'Stop Sharing' : 'screen sharig'}
+                {isSharingScreen ? 'Stop Sharing' : 'Mirror Screen'}
              </button>
           </div>
         </div>
