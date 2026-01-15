@@ -146,7 +146,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
   const screenStreamRef = useRef<MediaStream | null>(null);
   const channelRef = useRef<any>(null);
 
-  // Added WebRTC Refs for Peer-to-Peer streaming
+  // WebRTC Refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
 
@@ -175,7 +175,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       }
     };
 
-    // Add existing tracks to the connection
     const currentStream = isSharingScreen ? screenStreamRef.current : streamRef.current;
     if (currentStream) {
       currentStream.getTracks().forEach(track => pc.addTrack(track, currentStream));
@@ -211,7 +210,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       mounted = false;
       streamRef.current?.getTracks().forEach(track => track.stop());
       screenStreamRef.current?.getTracks().forEach(track => track.stop());
-      pcRef.current?.close(); // Cleanup WebRTC
+      pcRef.current?.close();
     };
   }, []);
 
@@ -247,7 +246,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       screenStreamRef.current = null;
       setIsSharingScreen(false);
       
-      // Restore camera track in WebRTC sender
       const camVideoTrack = streamRef.current?.getVideoTracks()[0];
       const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
       if (sender && camVideoTrack) sender.replaceTrack(camVideoTrack);
@@ -259,7 +257,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
         screenStreamRef.current = stream;
         setIsSharingScreen(true);
         
-        // Replace current video track in WebRTC sender
         const screenTrack = stream.getVideoTracks()[0];
         const sender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
         if (sender) sender.replaceTrack(screenTrack);
@@ -268,7 +265,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
           setIsSharingScreen(false);
           screenStreamRef.current = null;
           
-          // Revert sender to camera
           const restoredCamTrack = streamRef.current?.getVideoTracks()[0];
           const restoredSender = pcRef.current?.getSenders().find(s => s.track?.kind === 'video');
           if (restoredSender && restoredCamTrack) restoredSender.replaceTrack(restoredCamTrack);
@@ -316,9 +312,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       .on('broadcast', { event: 'clear-canvas' }, () => setElements([]))
       .on('broadcast', { event: 'file-added' }, (p) => setSharedFiles(prev => [...prev, p.payload.file]))
       .on('broadcast', { event: 'media-update' }, (p) => setPartnerMediaStatus(p.payload))
-      // Handle WebRTC Signaling Events
       .on('broadcast', { event: 'peer-joined' }, async () => {
-        // I was already here, so I will send the offer to the joiner
         const pc = initWebRTC();
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -344,7 +338,6 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
       if (status === 'SUBSCRIBED') {
         channelRef.current = channel;
         channel.send({ type: 'broadcast', event: 'media-update', payload: { isMuted, isVideoOff, isSharingScreen } });
-        // Notify others that I've joined
         channel.send({ type: 'broadcast', event: 'peer-joined', payload: {} });
       }
     });
@@ -464,7 +457,8 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 1.5) return;
+    // Smooth movement threshold
+    if (Math.hypot(x - lastMousePosRef.current.x, y - lastMousePosRef.current.y) < 0.5) return;
     lastMousePosRef.current = { x, y };
 
     if (drawingTool === 'select' && selectedId && isInteractingRef.current) {
@@ -600,7 +594,22 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
               <div className="flex-1 relative font-mono text-[13px] overflow-hidden group">
                  <div className="absolute inset-0 transition-all duration-700 pointer-events-none opacity-20" style={{ background: `radial-gradient(circle at 50% 50%, ${currentTheme.glow} 0%, transparent 80%)` }} />
                  <pre ref={preRef} className="absolute inset-0 p-6 m-0 pointer-events-none whitespace-pre-wrap break-words leading-relaxed overflow-hidden text-slate-300 transition-colors duration-500" dangerouslySetInnerHTML={{ __html: highlightCode(code, selectedLang) }} />
-                 <textarea ref={editorRef} spellCheck={false} value={code} onScroll={() => { if (preRef.current && editorRef.current) { preRef.current.scrollTop = editorRef.current.scrollTop; preRef.current.scrollLeft = editorRef.current.scrollLeft; } }} onChange={(e) => { setCode(e.target.value); channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); }} className="absolute inset-0 p-6 pt-[25px] pl-[56px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-relaxed border-none selection:bg-primary/30" />
+                 <textarea 
+                   ref={editorRef} 
+                   spellCheck={false} 
+                   value={code} 
+                   onScroll={() => { 
+                     if (preRef.current && editorRef.current) { 
+                       preRef.current.scrollTop = editorRef.current.scrollTop; 
+                       preRef.current.scrollLeft = editorRef.current.scrollLeft; 
+                     } 
+                   }} 
+                   onChange={(e) => { 
+                     setCode(e.target.value); 
+                     channelRef.current?.send({ type: 'broadcast', event: 'code-update', payload: { code: e.target.value, lang: selectedLang } }); 
+                   }} 
+                   className="absolute inset-0 p-6 pt-6 pl-[80px] bg-transparent text-transparent caret-white resize-none outline-none overflow-auto whitespace-pre-wrap break-words leading-relaxed border-none selection:bg-primary/30 z-10" 
+                 />
               </div>
             </div>
           ) : (
@@ -663,7 +672,7 @@ const LiveSession: React.FC<Props> = ({ matchId, partner, skill = 'python', onEn
              <div className="h-8 w-px bg-white/10 mx-2" />
              <button onClick={handleToggleScreenShare} className={`px-6 h-12 rounded-2xl flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 ${isSharingScreen ? 'bg-primary text-white shadow-glow' : 'bg-white/5 text-slate-400 hover:text-white'}`}>
                 <span className="material-symbols-outlined text-lg">{isSharingScreen ? 'stop_screen_share' : 'screen_share'}</span> 
-                {isSharingScreen ? 'Stop Sharing' : 'Mirror Node'}
+                {isSharingScreen ? 'Stop Sharing' : 'screen sharig'}
              </button>
           </div>
         </div>
